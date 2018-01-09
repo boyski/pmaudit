@@ -1,0 +1,380 @@
+#!/usr/bin/env python2.7
+"""
+Run a command with file auditing or query the resulting audit.
+
+When run with a "--" separator %(prog)s will invoke the command to the
+right of the separator and record subsequent file accesses to the file
+named by the -o option in .json format. When run without "--" it reads
+the audit file and dumps results (things like prereqs, targets, etc)
+from it. The audit file defaults to "%(prog)s.json".
+
+Audited files are divided into 4 categories: prerequisites,
+intermediate targets, final targets, and unused:
+
+  - A prerequisite is a file which was opened only for read; commonly
+  this will be a source file originally checked out from SCM.
+
+  - An intermediate target is one that was opened for both write and read
+  (in that order). The most common example would be a .o file created
+  by the compiler then read by the linker.
+
+  - A final target is a file which was opened only for write.
+  Typically it's one of the final, deliverable build artifacts, the
+  thing you set out to build.
+
+  - An unused file, naturally, is one not opened at all during the audit.
+
+HOW IT WORKS:
+
+This is the simplest form of file access auditing and could almost be
+done by hand without scripting. It relies only on standard Unix file
+access (atime) and modification (mtime) semantics. Before running the
+audited command, the timestamps of all existing files in the audited
+directory tree are recorded.  Then, as soon as the command finishes,
+all files in the directory are rechecked.  If a file existed before
+the audit and neither atime nor mtime has moved after, it was clearly
+unused.  If only the atime has advanced it's a prereq. If it came into
+existence during the audit it's a target, and if atime > mtime it's an
+intermediate target. Etc.
+
+A nice benefit of this simplicity is that there's practically no
+performance cost. Most build-auditing techniques rely on a special
+filesystem or ptrace which can slow things down measurably. This approach
+has no effect on the running build; the only cost is that of traversing
+and stat-ing every file in the audited directory before and after.
+
+It won't work unless the filesystem enables atime-updating behavior,
+which is the traditional default but is often disabled by NFS servers
+for performance reasons. Thus it must be used either in local disk or
+an NFS mount without the "noatime" option. An error is given if atimes
+don't seem to be updated in the audited directory's filesystem.
+
+Also, due to the introduction of "relatime" behavior on Linux it's
+become necessary to artificially set each pre-existing file's atime
+prior to its mtime during prior-state collection.  Read up on relatime
+for background. Looking forward, the existence of relatime may make
+the use of noatime in NFS less common.
+
+If the underlying filesystem doesn't support sufficient timestamp
+precision, results may be iffy. Clearly, when atimes and mtimes are
+recorded only as seconds all files touched within the same second will
+have the same timestamp and confusion may occur. Thus this is best used
+on a modern Linux filesystem which records nanoseconds or similar.
+It's not that nanosecond precision per se is required, just that the
+more precision the better.
+
+As with any file-auditing technology it might expose underlying
+weaknesses in the build model. I.e. if a file shows up in the wrong
+category it may reveal a race condition.
+
+EXAMPLES:
+
+Run an audited make command and leave the results in %(prog)s.json:
+
+    make clean; %(prog)s -o %(prog)s.json -- make
+
+Dump the prerequisite set derived by the audit above:
+
+    %(prog)s -p %(prog)s.json
+
+Dump the discovered targets, both intermediate and final:
+
+    %(prog)s -t %(prog)s.json
+"""
+
+###############################################################################
+# Copyright (C) 2010-2018 David Boyce
+#
+# This program is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation; either version 3 of the License, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more detail.
+#
+# You may have received a copy of the GNU General Public License along with
+# this program.  If not, see <http://www.gnu.org/licenses/>.
+###############################################################################
+
+import argparse
+import collections
+import datetime
+import json
+import logging
+import os
+import socket
+import subprocess
+import sys
+import time
+
+PROG = os.path.basename(__file__)
+
+FMT = '%.07f,%.07f'
+FMT2 = ','.join([FMT, FMT])
+FMTN = ','.join(['-2,-1', FMT])
+FMTU = ','.join([FMT, '0,0'])
+
+BASE = 'BASE'
+START = 'START'
+PRIOR_COUNT = 'PRIOR_COUNT'
+AFTER_COUNT = 'AFTER_COUNT'
+PREREQS = 'PREREQS'
+INTERMEDIATES = 'INTERMEDIATES'
+FINALS = 'FINALS'
+UNUSED = 'UNUSED'
+DB = 'DB'
+
+
+class PMAudit(object):
+
+    """Track files used (prereqs) and generated (targets)."""
+
+    def __init__(self, watchdir, exclude=()):
+        self.watchdir = watchdir
+        self.exclude = set(['.git', '.svn'])
+        if exclude:
+            self.exclude |= set(exclude)
+        self.prereqs = collections.OrderedDict()
+        self.intermediates = collections.OrderedDict()
+        self.finals = collections.OrderedDict()
+        self.unused = collections.OrderedDict()
+        self.reftime = None
+        self.prior = {}
+
+    def start(self):
+        """
+        Start the build audit.
+
+        There are some builds which touch their prerequisites,
+        causing them to look like targets. To protect against
+        that we use the belt-and-suspenders approach of checking
+        against a list of files which predated the build.
+
+        Also, due to the introduction of the Linux 'relatime' option
+        it's necessary to prime the atime pump before starting. This
+        is done by making all atimes a bit earlier than their mtimes.
+        """
+
+        for parent, dnames, fnames in os.walk(self.watchdir):
+            dnames[:] = (dn for dn in dnames if dn not in self.exclude)
+            for fname in fnames:
+                if fname in self.exclude:
+                    continue
+                path = os.path.relpath(os.path.join(parent, fname))
+                if os.path.islink(path):
+                    continue
+                # Modern Linux won't update atime unless it's
+                # older than mtime (the "relatime" feature).
+                stats = os.stat(path)
+                atime, mtime = (stats.st_atime, stats.st_mtime)
+                if atime >= mtime:
+                    atime = mtime - 1
+                    os.utime(path, (atime, mtime))
+                self.prior[path] = (atime, mtime)
+
+        # Disallow the audit run if atime updates are disabled.
+        ref_fname = os.path.join(self.watchdir, '.audit-ref.tmp')
+        with open(ref_fname, 'w') as f:
+            f.write('temp contents\n')
+            stats = os.fstat(f.fileno())
+        os.utime(ref_fname, (stats.st_mtime - 1, stats.st_mtime))
+        with open(ref_fname) as f:
+            f.read()
+        nstats = os.stat(ref_fname)
+        os.remove(ref_fname)
+        if nstats.st_atime < nstats.st_mtime:
+            logging.error('atimes not updated in %s filesystem',
+                          os.path.dirname(os.path.abspath(ref_fname)))
+            sys.exit(2)
+
+        self.reftime = time.time()
+
+    def finish(self):
+        """End the audit, return the result."""
+
+        # Record the set of surviving files with their times,
+        # dividing them into the standard categories.
+        # For each recorded file 4 timestamps are kept:
+        # "pre-atime,pre-mtime,post-atime,post-mtime".
+        # This data isn't needed once files have been categorized
+        # but may be helpful in analysis or debugging.
+        # Note: we can't use os.walk() here because it has a way
+        # of updating symlink atimes.
+        prereqs, intermediates, finals, unused = {}, {}, {}, {}
+
+        def visit(prunedirs, parent, fnames):
+            """Callback function for os.path.walk() to categorize files."""
+            for prunedir in prunedirs:
+                if parent.startswith(prunedir):
+                    return
+            if os.path.basename(parent) in self.exclude:
+                prunedirs.add(parent + os.sep)
+                return
+            for fname in fnames:
+                if fname in self.exclude:
+                    continue
+                path = os.path.relpath(os.path.join(parent, fname))
+                if os.path.isdir(path):
+                    continue
+                stats = os.lstat(path)
+                atime, mtime = stats.st_atime, stats.st_mtime
+                pstate = self.prior.get(path)
+                if pstate:
+                    if atime > pstate[0]:
+                        val = FMT2 % (pstate + (atime, mtime))
+                        if mtime > pstate[1]:
+                            if mtime > atime:
+                                finals[path] = val
+                                msg = 'pre-existing file is final'
+                            else:
+                                intermediates[path] = val
+                                msg = 'pre-existing file is target'
+                            logging.info('%s: %s', msg, path)
+                        else:
+                            prereqs[path] = val
+                    elif mtime > pstate[1]:
+                        val = FMT2 % (pstate + (atime, mtime))
+                        finals[path] = val
+                        logging.info('pre-existing file modified: %s', path)
+                    else:
+                        val = FMTU % pstate
+                        unused[path] = val
+                        continue
+                else:
+                    val = FMTN % (atime, mtime)
+                    if mtime < atime:
+                        intermediates[path] = val
+                    else:
+                        finals[path] = val
+        os.path.walk(self.watchdir, visit, set())
+
+        # Sort the data just derived. Not needed but helps readability.
+        for k in sorted(prereqs):
+            self.prereqs[k] = prereqs[k]
+        for k in sorted(intermediates):
+            self.intermediates[k] = intermediates[k]
+        for k in sorted(finals):
+            self.finals[k] = finals[k]
+        for k in sorted(unused):
+            self.unused[k] = unused[k]
+
+        # Build up and return a serializable database.
+        root = collections.OrderedDict()
+        root[BASE] = '%s:%s' % (socket.gethostname(), os.getcwd())
+        dt = datetime.datetime.utcfromtimestamp(self.reftime)
+        refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        root[START] = '%s (%f)' % (refstr, self.reftime)
+        root[PRIOR_COUNT] = str(len(self.prior))
+        after_count = len(self.prereqs) + len(self.intermediates) + \
+            len(self.finals) + len(self.unused)
+        root[AFTER_COUNT] = str(after_count)
+        root[DB] = collections.OrderedDict()
+        root[DB][PREREQS] = self.prereqs
+        root[DB][INTERMEDIATES] = self.intermediates
+        root[DB][FINALS] = self.finals
+        root[DB][UNUSED] = self.unused
+
+        return root
+
+
+def cfglog(bump):
+    """Configure logging."""
+    logging.basicConfig(
+        format=PROG + ': %(levelname)s: %(message)s',
+        level=max(logging.DEBUG, logging.WARNING - (logging.DEBUG * bump)))
+
+
+def main():
+    """Entry point for standalone use."""
+    parser = argparse.ArgumentParser(
+        epilog=__doc__.strip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    db_parser = parser.add_mutually_exclusive_group()
+    sum_parser = parser.add_mutually_exclusive_group()
+    sum_parser.add_argument(
+        '-a', '--all-involved', action='store_true',
+        help="list all involved files")
+    parser.add_argument(
+        '-f', '--final-targets', action='store_true',
+        help="list final target files")
+    parser.add_argument(
+        '-i', '--intermediates', action='store_true',
+        help="list intermediate target files")
+    parser.add_argument(
+        '-p', '--prerequisites', action='store_true',
+        help="list prerequisite files")
+    sum_parser.add_argument(
+        '-t', '--targets', action='store_true',
+        help="list all target files (intermediate and final")
+    parser.add_argument(
+        '-u', '--unused', action='store_true',
+        help="list files present but unused")
+    db_parser.add_argument(
+        '-o', '--save', default='%s.json' % PROG,
+        metavar='FILE',
+        help="save audit data to FILE (default=%(default)s)")
+    parser.add_argument(
+        '-V', '--verbosity', action='count', default=0,
+        help="bump verbosity level")
+    parser.add_argument(
+        '-w', '--watch', default=os.curdir,
+        metavar='DIR',
+        help="audit activity within DIR (default=%(default)s)")
+
+    if '--' in sys.argv:
+        opts, cmd = parser.parse_known_args()
+        if '--' in cmd:
+            cmd.remove('--')
+        cfglog(opts.verbosity)
+        sys.stderr.write('+ %s\n' % ' '.join(cmd))
+        audit = PMAudit(opts.watch, exclude=(os.path.basename(opts.save),))
+        audit.start()
+        rc = subprocess.call(cmd)
+        adb = audit.finish()
+        with open(opts.save, 'w') as f:
+            json.dump(adb, f, indent=2)
+            f.write('\n')
+        sys.exit(2 if rc else 0)
+
+    db_parser.add_argument('dbfile', default='%s.json' % PROG, nargs='?',
+                           help="query the audit file at this path")
+    opts = parser.parse_args()
+    cfglog(opts.verbosity)
+
+    with open(opts.dbfile, 'r') as f:
+        root = json.load(f)
+    db = root[DB]
+
+    results = set()
+
+    if opts.all_involved:
+        opts.prerequisites = opts.intermediates = opts.final_targets = True
+    elif opts.targets:
+        opts.intermediates = opts.final_targets = True
+
+    if opts.intermediates:
+        results.update(db[INTERMEDIATES].keys())
+    if opts.prerequisites:
+        results.update(db[PREREQS].keys())
+    if opts.final_targets:
+        results.update(db[FINALS].keys())
+    if opts.unused:
+        results.update(db[UNUSED].keys())
+
+    for path in sorted(results):
+        sys.stdout.write(path + '\n')
+
+    sys.stdout.flush()
+
+if __name__ == '__main__':
+    try:
+        main()
+    except IOError as e:
+        # Workaround for an interpreter bug triggered by SIGPIPE.
+        # See http://code.activestate.com/lists/python-tutor/88460/
+        if 'Broken pipe' not in e.strerror:
+            raise
+
+# vim: filetype=python:et:ts=8:sw=4:tw=80
