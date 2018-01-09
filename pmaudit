@@ -132,8 +132,8 @@ class PMAudit(object):
 
     """Track files used (prereqs) and generated (targets)."""
 
-    def __init__(self, watchdir, exclude=()):
-        self.watchdir = watchdir
+    def __init__(self, watchdirs, exclude=()):
+        self.watchdirs = watchdirs
         self.exclude = set(['.git', '.svn'])
         if exclude:
             self.exclude |= set(exclude)
@@ -158,37 +158,38 @@ class PMAudit(object):
         is done by making all atimes a bit earlier than their mtimes.
         """
 
-        for parent, dnames, fnames in os.walk(self.watchdir):
-            dnames[:] = (dn for dn in dnames if dn not in self.exclude)
-            for fname in fnames:
-                if fname in self.exclude:
-                    continue
-                path = os.path.relpath(os.path.join(parent, fname))
-                if os.path.islink(path):
-                    continue
-                # Modern Linux won't update atime unless it's
-                # older than mtime (the "relatime" feature).
-                stats = os.stat(path)
-                atime, mtime = (stats.st_atime, stats.st_mtime)
-                if atime >= mtime:
-                    atime = mtime - 1
-                    os.utime(path, (atime, mtime))
-                self.prior[path] = (atime, mtime)
+        for watchdir in self.watchdirs:
+            for parent, dnames, fnames in os.walk(watchdir):
+                dnames[:] = (dn for dn in dnames if dn not in self.exclude)
+                for fname in fnames:
+                    if fname in self.exclude:
+                        continue
+                    path = os.path.relpath(os.path.join(parent, fname))
+                    if os.path.islink(path):
+                        continue
+                    # Modern Linux won't update atime unless it's
+                    # older than mtime (the "relatime" feature).
+                    stats = os.stat(path)
+                    atime, mtime = (stats.st_atime, stats.st_mtime)
+                    if atime >= mtime:
+                        atime = mtime - 1
+                        os.utime(path, (atime, mtime))
+                    self.prior[path] = (atime, mtime)
 
-        # Disallow the audit run if atime updates are disabled.
-        ref_fname = os.path.join(self.watchdir, '.audit-ref.tmp')
-        with open(ref_fname, 'w') as f:
-            f.write('temp contents\n')
-            stats = os.fstat(f.fileno())
-        os.utime(ref_fname, (stats.st_mtime - 1, stats.st_mtime))
-        with open(ref_fname) as f:
-            f.read()
-        nstats = os.stat(ref_fname)
-        os.remove(ref_fname)
-        if nstats.st_atime < nstats.st_mtime:
-            logging.error('atimes not updated in %s filesystem',
-                          os.path.dirname(os.path.abspath(ref_fname)))
-            sys.exit(2)
+            # Disallow the audit run if atime updates are disabled.
+            ref_fname = os.path.join(watchdir, '.audit-ref.tmp')
+            with open(ref_fname, 'w') as f:
+                f.write('temp contents\n')
+                stats = os.fstat(f.fileno())
+            os.utime(ref_fname, (stats.st_mtime - 1, stats.st_mtime))
+            with open(ref_fname) as f:
+                f.read()
+            nstats = os.stat(ref_fname)
+            os.remove(ref_fname)
+            if nstats.st_atime < nstats.st_mtime:
+                logging.error('atimes not updated in %s filesystem',
+                              os.path.dirname(os.path.abspath(ref_fname)))
+                sys.exit(2)
 
         self.reftime = time.time()
 
@@ -249,7 +250,8 @@ class PMAudit(object):
                         intermediates[path] = val
                     else:
                         finals[path] = val
-        os.path.walk(self.watchdir, visit, set())
+        for watchdir in self.watchdirs:
+            os.path.walk(watchdir, visit, set())
 
         # Sort the data just derived. Not needed but helps readability.
         for k in sorted(prereqs):
@@ -320,9 +322,9 @@ def main():
         '-V', '--verbosity', action='count', default=0,
         help="bump verbosity level")
     parser.add_argument(
-        '-w', '--watch', default=os.curdir,
+        '-w', '--watch', action='append', default=[os.curdir],
         metavar='DIR',
-        help="audit activity within DIR (default=%(default)s)")
+        help="audit activity within DIRs (default=%(default)s)")
 
     if '--' in sys.argv:
         opts, cmd = parser.parse_known_args()
