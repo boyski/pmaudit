@@ -332,7 +332,10 @@ def main():
             cmd.remove('--')
         cfglog(opts.verbosity)
         sys.stderr.write('+ %s\n' % ' '.join(cmd))
-        audit = PMAudit(opts.watch, exclude=(os.path.basename(opts.save),))
+        wdirs = []
+        for word in opts.watch:
+            wdirs.extend(word.split(','))
+        audit = PMAudit(wdirs, exclude=(os.path.basename(opts.save),))
         audit.start()
         rc = subprocess.call(cmd)
         adb = audit.finish()
