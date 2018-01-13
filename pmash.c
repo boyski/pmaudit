@@ -33,12 +33,16 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#define TMFMT "%010ld.%09ld,%010ld.%09ld,%010ld.%09ld,%010ld.%09ld"
+
 #define NOPENFD 20
 
-static char short_opts[] = "c:o:w:";
+static char short_opts[] = "c:eo:Vw:";
 static struct option long_opts[] = {
    {"command", required_argument, NULL, 'c'},
+   {"errexit", no_argument, NULL, 'e'},
    {"outfile", required_argument, NULL, 'o'},
+   {"verbose", no_argument, NULL, 'V'},
    {"watch", required_argument, NULL, 'w'},
    {"help", no_argument, NULL, 'h'},
    {NULL, 0, NULL, 0}
@@ -55,6 +59,7 @@ typedef struct {
 static void *tree1, *tree2;
 
 static FILE *fp;
+static int verbosity;
 
 static void
 usage(int rc)
@@ -65,7 +70,9 @@ usage(int rc)
     fprintf(fp, "Usage: %s -c <cmd> -o <outfile> [-w dir[,dir,...]]\n", prog);
     fprintf(fp, fmt, "-h/--help", "Print this usage summary");
     fprintf(fp, fmt, "-c/--command", "Command to invoke");
+    fprintf(fp, fmt, "-e/--errexit", "Exit on first error");
     fprintf(fp, fmt, "-o/--outfile", "File path to save prereq list");
+    fprintf(fp, fmt, "-V/--verbose", "Bump verbosity mode");
     fprintf(fp, fmt, "-w/--watch", "Directories to monitor");
     exit(rc);
 }
@@ -159,25 +166,42 @@ static void
 post_walk(const void *nodep, const VISIT which, const int depth)
 {
     pathentry_s *p = *((pathentry_s **)nodep);
+    int prereq = 0;
 
     (void)depth;
     if (which == postorder || which == leaf) {
-        // If mtime has moved it's a target ...
+        // If mtime has moved it's a target 
+        // and if atime hasn't moved it's unused.
         if (p->times2[1].tv_sec > p->times1[1].tv_sec) {
-            return;
+            // Fall through.
         } else if (p->times2[1].tv_sec == p->times1[1].tv_sec &&
                    p->times2[1].tv_nsec > p->times1[1].tv_nsec) {
-            return;
-        }
-        // ... and if atime has not moved it's unused.
-        if (p->times2[0].tv_sec <= p->times1[0].tv_sec) {
-            return;
+            // Fall through.
+        } else if (p->times2[0].tv_sec <= p->times1[0].tv_sec) {
+            // Fall through.
         } else if (p->times2[0].tv_sec == p->times1[0].tv_sec &&
                    p->times2[0].tv_nsec <= p->times1[0].tv_nsec) {
-            return;
+            // Fall through.
+        } else {
+            prereq = 1;
         }
-        // Must be a prereq.
-        fprintf(fp, "%s\n", p->path);
+        if (prereq) {
+            fputs(p->path, fp);
+            if (verbosity) {
+                fprintf(fp, "  # " TMFMT,
+                    p->times1[0].tv_sec, p->times1[0].tv_nsec,
+                    p->times1[1].tv_sec, p->times1[1].tv_nsec,
+                    p->times2[0].tv_sec, p->times2[0].tv_nsec,
+                    p->times2[1].tv_sec, p->times2[1].tv_nsec);
+            }
+            fputc('\n', fp);
+        } else if (verbosity) {
+            fprintf(fp, "## %-24s: " TMFMT "\n", p->path,
+                p->times1[0].tv_sec, p->times1[0].tv_nsec,
+                p->times1[1].tv_sec, p->times1[1].tv_nsec,
+                p->times2[0].tv_sec, p->times2[0].tv_nsec,
+                p->times2[1].tv_sec, p->times2[1].tv_nsec);
+        }
     }
 }
 
@@ -205,8 +229,14 @@ main(int argc, char *argv[])
             case 'c':
                 cmdstr = optarg;
                 break;
+            case 'e':
+                // TODO
+                break;
             case 'o':
                 outfile = optarg;
+                break;
+            case 'V':
+                verbosity++;
                 break;
             case 'w':
                 watchdirs = optarg;
@@ -234,6 +264,26 @@ main(int argc, char *argv[])
         }
     }
 
+    if (verbosity || getenv("PMASH_VERBOSITY")) {
+        int i;
+
+        fputs("++ ", stderr);
+        for (i = 0; i < argc; i++) {
+            if (strstr(argv[i], " ")) {
+                fputc('"', stderr);
+            }
+            fputs(argv[i], stderr);
+            if (i < argc - 1) {
+                fputc(' ', stderr);
+            }
+            if (strstr(argv[i], " ")) {
+                fputc('"', stderr);
+            }
+        }
+        fputc('\n', stderr);
+        asprintf(&cmdstr, "set -x; %s", cmdstr);
+    }
+
     if (system(cmdstr)) {
         rc = EXIT_FAILURE;
     }
@@ -246,6 +296,17 @@ main(int argc, char *argv[])
     }
 
     twalk(tree2, post_walk);
+
+    if (outfile) {
+        struct stat stats;
+
+        fclose(fp);
+        if (!stat(outfile, &stats) && !stats.st_size) {
+            if (unlink(outfile)) {
+                perror(outfile);
+            }
+        }
+    }
 
     exit(rc);
 }
