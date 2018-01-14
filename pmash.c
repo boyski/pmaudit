@@ -33,7 +33,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define TMFMT "%010ld.%09ld,%010ld.%09ld,%010ld.%09ld,%010ld.%09ld"
+#define TMFMT "a1=%010ld.%09ld m1=%010ld.%09ld a2=%010ld.%09ld m2=%010ld.%09ld"
 
 #define NOPENFD 20
 
@@ -188,7 +188,7 @@ post_walk(const void *nodep, const VISIT which, const int depth)
         if (prereq) {
             fputs(p->path, fp);
             if (verbosity) {
-                fprintf(fp, "  # " TMFMT,
+                fprintf(fp, " # " TMFMT,
                     p->times1[0].tv_sec, p->times1[0].tv_nsec,
                     p->times1[1].tv_sec, p->times1[1].tv_nsec,
                     p->times2[0].tv_sec, p->times2[0].tv_nsec,
