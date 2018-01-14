@@ -100,6 +100,10 @@ nftw_pre_callback(const char *fpath, const struct stat *sb,
         return 0;
     }
 
+    if (fpath[0] == '.' && fpath[1] == '/') {
+        fpath += 2;
+    }
+
     // Record atimes/mtimes but only after setting atimes behind mtimes
     // for "relatime" reasons.
     p1 = calloc(sizeof(pathentry_s), 1);
@@ -135,6 +139,10 @@ nftw_post_callback(const char *fpath, const struct stat *sb,
 
     if (strstr(fpath, ".git") || strstr(fpath, ".svn") || strstr(fpath, ".swp")) {
         return 0;
+    }
+
+    if (fpath[0] == '.' && fpath[1] == '/') {
+        fpath += 2;
     }
 
     // Record atimes/mtimes but only after setting atime behind mtime
