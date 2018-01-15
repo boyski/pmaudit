@@ -367,8 +367,10 @@ def main():
             prqs = adb[DB][PREREQS]
             if prqs:
                 with open(opts.save, 'w') as f:
-                    for prq in prqs:
-                        f.write(prq + '\n')
+                    f.write(os.path.splitext(opts.save)[0] + ': \\\n')
+                    for i, prq in enumerate(prqs):
+                        eol = ' \\\n' if i < len(prqs) - 1 else '\n'
+                        f.write('  %s%s' % (prq, eol))
         else:
             with open(opts.save, 'w') as f:
                 json.dump(adb, f, indent=2)

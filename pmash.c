@@ -59,7 +59,9 @@ typedef struct {
 static void *tree1, *tree2;
 
 static FILE *fp;
-static int verbosity;
+static char *outfile;
+static unsigned verbosity;
+static unsigned prq_count;
 
 static void
 usage(int rc)
@@ -202,21 +204,23 @@ post_walk(const void *nodep, const VISIT which, const int depth)
             prereq = 1;
         }
         if (prereq) {
-            fputs(p->path, fp);
-            if (verbosity) {
-                fprintf(fp, " # " TMFMT,
-                    p->times1[0].tv_sec, p->times1[0].tv_nsec,
-                    p->times1[1].tv_sec, p->times1[1].tv_nsec,
-                    p->times2[0].tv_sec, p->times2[0].tv_nsec,
-                    p->times2[1].tv_sec, p->times2[1].tv_nsec);
+            if (outfile) {
+                if (prq_count++) {
+                    fputs(" \\\n  ", fp);
+                } else {
+                    const char *c, *e;
+
+                    e = strrchr(outfile, '.');
+                    for (c = outfile; c < e; c++) {
+                        fputc(*c, fp);
+                    }
+                    fputs(": \\\n  ", fp);
+                }
+                fputs(p->path, fp);
+            } else {
+                fputs(p->path, fp);
+                fputc('\n', fp);
             }
-            fputc('\n', fp);
-        } else if (verbosity) {
-            fprintf(fp, "## %-24s: " TMFMT "\n", p->path,
-                p->times1[0].tv_sec, p->times1[0].tv_nsec,
-                p->times1[1].tv_sec, p->times1[1].tv_nsec,
-                p->times2[0].tv_sec, p->times2[0].tv_nsec,
-                p->times2[1].tv_sec, p->times2[1].tv_nsec);
         }
     }
 }
@@ -226,7 +230,7 @@ main(int argc, char *argv[])
 {
     char *path;
     char *p;
-    char *cmdstr = NULL, *outfile = NULL, *watchdirs = ".";
+    char *cmdstr = NULL, *watchdirs = ".";
     int rc = EXIT_SUCCESS;
 
     prog = strrchr(argv[0], '/');
@@ -346,12 +350,12 @@ main(int argc, char *argv[])
     }
 
     twalk(tree2, post_walk);
+    fputc('\n', fp);
 
     if (outfile) {
-        struct stat stats;
-
         fclose(fp);
-        if (!stat(outfile, &stats) && !stats.st_size) {
+        // Don't keep empty deps files around.
+        if (!prq_count) {
             insist(unlink(outfile) != -1, outfile);
         }
     }
