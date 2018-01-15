@@ -1,10 +1,13 @@
 #!/bin/bash
 
-# This is just a sample wrapper to show ways of running GNU make
-# using pmash to derive dependency data. The idea is to tell make
-# to use pmash via SHELL, set .SHELLFLAGS to the set of options
-# we want it to see, and force make to use a single shell per recipe
-# because otherwise the results can get messed up. Adjust as desired.
+# This is a sample wrapper to show ways of running GNU make using
+# pmash (or pmaudit) to derive dependency data. It demonstrates how
+# to override SHELL to use the auditor, give .SHELLFLAGS the set of
+# options we want it to see, and force make to use a single shell
+# per recipe because otherwise the results can get messed up.
+#
+# Tweak as desired. This is only a demo.
 
 set -x
-make SHELL=pmash .SHELLFLAGS='-o $@.d -c' --eval=.ONESHELL: "$@"
+# make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='-o $@.d -c' "$@"
+make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-o $@.d -c' "$@"

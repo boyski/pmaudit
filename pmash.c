@@ -37,13 +37,13 @@
 
 #define NOPENFD 20
 
-static char short_opts[] = "c:eo:Vw:";
+static char short_opts[] = "c:eo:VW:";
 static struct option long_opts[] = {
    {"command", required_argument, NULL, 'c'},
    {"errexit", no_argument, NULL, 'e'},
    {"outfile", required_argument, NULL, 'o'},
    {"verbose", no_argument, NULL, 'V'},
-   {"watch", required_argument, NULL, 'w'},
+   {"watch", required_argument, NULL, 'W'},
    {"help", no_argument, NULL, 'h'},
    {NULL, 0, NULL, 0}
 };
@@ -67,13 +67,13 @@ usage(int rc)
     FILE *fp = (rc == EXIT_SUCCESS) ? stdout : stderr;
     const char *fmt = "   %-18s %s\n";
 
-    fprintf(fp, "Usage: %s -c <cmd> [-o <outfile>] [-w dir[,dir,...]]\n", prog);
+    fprintf(fp, "Usage: %s -c <cmd> [-o <outfile>] [-W dir[,dir,...]]\n", prog);
     fprintf(fp, fmt, "-h/--help", "Print this usage summary");
     fprintf(fp, fmt, "-c/--command", "Command to invoke");
     fprintf(fp, fmt, "-e/--errexit", "Exit on first error");
     fprintf(fp, fmt, "-o/--outfile", "File path to save prereq list");
     fprintf(fp, fmt, "-V/--verbose", "Bump verbosity mode");
-    fprintf(fp, fmt, "-w/--watch", "Directories to monitor");
+    fprintf(fp, fmt, "-W/--watch", "Directories to monitor");
     exit(rc);
 }
 
@@ -225,6 +225,7 @@ int
 main(int argc, char *argv[])
 {
     char *path;
+    char *p;
     char *cmdstr = NULL, *outfile = NULL, *watchdirs = ".";
     int rc = EXIT_SUCCESS;
 
@@ -254,7 +255,7 @@ main(int argc, char *argv[])
             case 'V':
                 verbosity++;
                 break;
-            case 'w':
+            case 'W':
                 watchdirs = optarg;
                 break;
         }
@@ -264,6 +265,18 @@ main(int argc, char *argv[])
         usage(EXIT_FAILURE);
     }
 
+    /*
+     * It's hard to see how this could ever work in parallel builds
+     * so that use is disallowed.
+     */
+    if ((p = getenv("MAKEFLAGS"))) {
+        char *eq = strchr(p, '=');
+        char *jf = strstr(p, " -j");
+        if (jf && (!eq || jf < eq)) {
+            die("not supported in -j mode");
+        }
+    }
+
     if (outfile) {
         insist((fp = fopen(outfile, "w")) != NULL, outfile);
     } else {
@@ -271,35 +284,30 @@ main(int argc, char *argv[])
     }
 
     for (path = strtok(strdup(watchdirs), ","); path; path = strtok(NULL, ",")) {
-        char *atime_tmp;
+        char *tmpf;
         char buf[] = {"data\n"};
         struct stat ostats, nstats;
         struct timespec otimes[2] = {{-1, 0L}, {0, UTIME_OMIT}};
-        int dfd, fd;
-
-        // TODO
-        insist((dfd = open(path, O_RDONLY)) != -1, path);
-        insist(close(dfd) != -1, path);
+        int fd;
 
         /*
          * Create, read, and remove a temp file to check that
          * atimes are being updated.
          */
-        insist((asprintf(&atime_tmp, "%s/audit.%ld.tmp", path,
+        insist((asprintf(&tmpf, "%s/audit.%ld.tmp", path,
                         (long)getpid())) != -1, "asprintf()");
-        insist((fd = open(atime_tmp, O_CREAT|O_WRONLY|O_EXCL, 0644)) != -1,
-                atime_tmp);
-        insist(write(fd, buf, strlen(buf)) != -1, atime_tmp);
-        insist(fstat(fd, &ostats) != -1, atime_tmp);
+        insist((fd = open(tmpf, O_CREAT|O_WRONLY|O_EXCL, 0644)) != -1, tmpf);
+        insist(write(fd, buf, strlen(buf)) != -1, tmpf);
+        insist(fstat(fd, &ostats) != -1, tmpf);
         otimes[0].tv_sec = ostats.st_mtime - 1;
-        insist(futimens(fd, otimes) != -1, atime_tmp);
-        insist(close(fd) != -1, atime_tmp);
-        insist((fd = open(atime_tmp, O_RDONLY)) != -1, atime_tmp);
-        insist(read(fd, buf, sizeof(buf)) != -1, atime_tmp);
-        insist(close(fd) != -1, atime_tmp);
-        insist(stat(atime_tmp, &nstats) != -1, atime_tmp);
-        insist(unlink(atime_tmp) != -1, atime_tmp);
-        (void)free(atime_tmp);
+        insist(futimens(fd, otimes) != -1, tmpf);
+        insist(close(fd) != -1, tmpf);
+        insist((fd = open(tmpf, O_RDONLY)) != -1, tmpf);
+        insist(read(fd, buf, sizeof(buf)) != -1, tmpf);
+        insist(close(fd) != -1, tmpf);
+        insist(stat(tmpf, &nstats) != -1, tmpf);
+        insist(unlink(tmpf) != -1, tmpf);
+        (void)free(tmpf);
         if (nstats.st_atime < nstats.st_mtime ||
                 (nstats.st_atime == nstats.st_mtime &&
                  nstats.st_atim.tv_nsec < nstats.st_mtim.tv_nsec)) {
@@ -318,7 +326,7 @@ main(int argc, char *argv[])
                 fputc('"', stderr);
             }
             fputs(argv[i], stderr);
-            if (i < argc - 1) {
+            if (i < (argc - 1)) {
                 fputc(' ', stderr);
             }
             if (strstr(argv[i], " ")) {
