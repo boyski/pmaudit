@@ -75,7 +75,10 @@ usage(int rc)
     fprintf(fp, fmt, "-e/--errexit", "Exit on first error");
     fprintf(fp, fmt, "-o/--outfile", "File path to save prereq list");
     fprintf(fp, fmt, "-V/--verbose", "Bump verbosity mode");
-    fprintf(fp, fmt, "-W/--watch", "Directories to monitor");
+    fprintf(fp, fmt, "-W/--watch", "Directories to monitor (default='.')");
+    fprintf(fp, "\nEXAMPLES:\n\n");
+    fprintf(fp, "Compile foo.o leaving prereq data in foo.o.d:\n\n");
+    fprintf(fp, "    %s -c 'gcc -c foo.c' -o foo.o.d\n", prog);
     exit(rc);
 }
 
@@ -231,6 +234,7 @@ main(int argc, char *argv[])
     char *path;
     char *p;
     char *cmdstr = NULL, *watchdirs = ".";
+    int eflag = 0;
     int rc = EXIT_SUCCESS;
 
     prog = strrchr(argv[0], '/');
@@ -251,7 +255,7 @@ main(int argc, char *argv[])
                 cmdstr = optarg;
                 break;
             case 'e':
-                // TODO
+                eflag++;
                 break;
             case 'o':
                 outfile = optarg;
@@ -322,23 +326,29 @@ main(int argc, char *argv[])
     }
 
     if (verbosity || getenv("PMASH_VERBOSITY")) {
-        int i;
+        if (verbosity > 1) {
+            int i;
 
-        fputs("++ ", stderr);
-        for (i = 0; i < argc; i++) {
-            if (strstr(argv[i], " ")) {
-                fputc('"', stderr);
+            fputs("++ ", stderr);
+            for (i = 0; i < argc; i++) {
+                if (strstr(argv[i], " ")) {
+                    fputc('"', stderr);
+                    fputs(argv[i], stderr);
+                    fputc('"', stderr);
+                } else {
+                    fputs(argv[i], stderr);
+                }
+                if (i < (argc - 1)) {
+                    fputc(' ', stderr);
+                }
             }
-            fputs(argv[i], stderr);
-            if (i < (argc - 1)) {
-                fputc(' ', stderr);
-            }
-            if (strstr(argv[i], " ")) {
-                fputc('"', stderr);
-            }
+            fputc('\n', stderr);
         }
-        fputc('\n', stderr);
         insist(asprintf(&cmdstr, "set -x; %s", cmdstr) != -1, "asprintf()");
+    }
+
+    if (eflag) {
+        insist(asprintf(&cmdstr, "set -e; %s", cmdstr) != -1, "asprintf()");
     }
 
     if (system(cmdstr)) {
