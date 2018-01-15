@@ -67,7 +67,7 @@ usage(int rc)
     FILE *fp = (rc == EXIT_SUCCESS) ? stdout : stderr;
     const char *fmt = "   %-18s %s\n";
 
-    fprintf(fp, "Usage: %s -c <cmd> -o <outfile> [-w dir[,dir,...]]\n", prog);
+    fprintf(fp, "Usage: %s -c <cmd> [-o <outfile>] [-w dir[,dir,...]]\n", prog);
     fprintf(fp, fmt, "-h/--help", "Print this usage summary");
     fprintf(fp, fmt, "-c/--command", "Command to invoke");
     fprintf(fp, fmt, "-e/--errexit", "Exit on first error");
@@ -75,6 +75,22 @@ usage(int rc)
     fprintf(fp, fmt, "-V/--verbose", "Bump verbosity mode");
     fprintf(fp, fmt, "-w/--watch", "Directories to monitor");
     exit(rc);
+}
+
+void
+die(char *msg)
+{
+    fprintf(stderr, "%s: Error: %s\n", prog, msg);
+    exit(EXIT_FAILURE);
+}
+
+void
+insist(int success, const char *term)
+{
+    if (!success) {
+        fprintf(stderr, "%s: Error: %s: %s\n", prog, term, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
 }
 
 static int
@@ -112,13 +128,8 @@ nftw_pre_callback(const char *fpath, const struct stat *sb,
     p1->times1[0].tv_nsec = 0L;
     p1->times1[1].tv_sec = sb->st_mtime;
     p1->times1[1].tv_nsec = sb->st_mtim.tv_nsec;
-    if (utimensat(AT_FDCWD, fpath, p1->times1, 0)) {
-        perror(fpath);
-    }
-    if (!tsearch((const void *)p1, &tree1, pathcmp)) {
-        perror("tsearch(&pre)");
-        return 1;
-    }
+    insist(utimensat(AT_FDCWD, fpath, p1->times1, 0) != -1, fpath);
+    insist(tsearch((const void *)p1, &tree1, pathcmp) != NULL, "tsearch(&pre)");
 
     return 0;
 }
@@ -162,10 +173,7 @@ nftw_post_callback(const char *fpath, const struct stat *sb,
         p2->times1[1].tv_sec = p1->times1[1].tv_sec;
         p2->times1[1].tv_nsec = p1->times1[1].tv_nsec;
     }
-    if (!tsearch((const void *)p2, &tree2, pathcmp)) {
-        perror("tsearch(&post)");
-        return 1;
-    }
+    insist(tsearch((const void *)p2, &tree2, pathcmp) != NULL, "tsearch(&post)");
 
     return 0;
 }
@@ -257,19 +265,48 @@ main(int argc, char *argv[])
     }
 
     if (outfile) {
-        if (!(fp = fopen(outfile, "w"))) {
-            perror(outfile);
-            exit(EXIT_FAILURE);
-        }
+        insist((fp = fopen(outfile, "w")) != NULL, outfile);
     } else {
         fp = stdout;
     }
 
     for (path = strtok(strdup(watchdirs), ","); path; path = strtok(NULL, ",")) {
-        if (nftw(path, nftw_pre_callback, NOPENFD, FTW_MOUNT) == -1) {
-            perror(path);
-            exit(EXIT_FAILURE);
+        char *atime_tmp;
+        char buf[] = {"data\n"};
+        struct stat ostats, nstats;
+        struct timespec otimes[2] = {{-1, 0L}, {0, UTIME_OMIT}};
+        int dfd, fd;
+
+        // TODO
+        insist((dfd = open(path, O_RDONLY)) != -1, path);
+        insist(close(dfd) != -1, path);
+
+        /*
+         * Create, read, and remove a temp file to check that
+         * atimes are being updated.
+         */
+        insist((asprintf(&atime_tmp, "%s/audit.%ld.tmp", path,
+                        (long)getpid())) != -1, "asprintf()");
+        insist((fd = open(atime_tmp, O_CREAT|O_WRONLY|O_EXCL, 0644)) != -1,
+                atime_tmp);
+        insist(write(fd, buf, strlen(buf)) != -1, atime_tmp);
+        insist(fstat(fd, &ostats) != -1, atime_tmp);
+        otimes[0].tv_sec = ostats.st_mtime - 1;
+        insist(futimens(fd, otimes) != -1, atime_tmp);
+        insist(close(fd) != -1, atime_tmp);
+        insist((fd = open(atime_tmp, O_RDONLY)) != -1, atime_tmp);
+        insist(read(fd, buf, sizeof(buf)) != -1, atime_tmp);
+        insist(close(fd) != -1, atime_tmp);
+        insist(stat(atime_tmp, &nstats) != -1, atime_tmp);
+        insist(unlink(atime_tmp) != -1, atime_tmp);
+        (void)free(atime_tmp);
+        if (nstats.st_atime < nstats.st_mtime ||
+                (nstats.st_atime == nstats.st_mtime &&
+                 nstats.st_atim.tv_nsec < nstats.st_mtim.tv_nsec)) {
+            die("atimes not updated here");
         }
+
+        insist(nftw(path, nftw_pre_callback, NOPENFD, FTW_MOUNT) != -1, path);
     }
 
     if (verbosity || getenv("PMASH_VERBOSITY")) {
@@ -289,7 +326,7 @@ main(int argc, char *argv[])
             }
         }
         fputc('\n', stderr);
-        asprintf(&cmdstr, "set -x; %s", cmdstr);
+        insist(asprintf(&cmdstr, "set -x; %s", cmdstr) != -1, "asprintf()");
     }
 
     if (system(cmdstr)) {
@@ -297,10 +334,7 @@ main(int argc, char *argv[])
     }
 
     for (path = strtok(strdup(watchdirs), ","); path; path = strtok(NULL, ",")) {
-        if (nftw(path, nftw_post_callback, NOPENFD, FTW_MOUNT) == -1) {
-            perror(path);
-            rc = EXIT_FAILURE;
-        }
+        insist(nftw(path, nftw_post_callback, NOPENFD, FTW_MOUNT) != -1, path);
     }
 
     twalk(tree2, post_walk);
@@ -310,9 +344,7 @@ main(int argc, char *argv[])
 
         fclose(fp);
         if (!stat(outfile, &stats) && !stats.st_size) {
-            if (unlink(outfile)) {
-                perror(outfile);
-            }
+            insist(unlink(outfile) != -1, outfile);
         }
     }
 

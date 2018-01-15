@@ -177,11 +177,11 @@ class PMAudit(object):
                     self.prior[path] = (atime, mtime)
 
             # Disallow the audit run if atime updates are disabled.
-            ref_fname = os.path.join(watchdir, '.audit-ref.tmp')
+            ref_fname = os.path.join(watchdir, '.audit.%d.tmp' % os.getpid())
             with open(ref_fname, 'w') as f:
-                f.write('temp contents\n')
-                stats = os.fstat(f.fileno())
-            os.utime(ref_fname, (stats.st_mtime - 1, stats.st_mtime))
+                f.write('data\n')
+                ostats = os.fstat(f.fileno())
+            os.utime(ref_fname, (ostats.st_mtime - 1, ostats.st_mtime))
             with open(ref_fname) as f:
                 f.read()
             nstats = os.stat(ref_fname)
