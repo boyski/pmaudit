@@ -183,48 +183,65 @@ nftw_post_callback(const char *fpath, const struct stat *sb,
     return 0;
 }
 
+static int
+is_prereq(pathentry_s *p)
+{
+    // If mtime has moved it's a target 
+    // and if atime hasn't moved it's unused.
+    if (p->times2[1].tv_sec > p->times1[1].tv_sec) {
+        return 0;
+    } else if (p->times2[1].tv_sec == p->times1[1].tv_sec &&
+               p->times2[1].tv_nsec > p->times1[1].tv_nsec) {
+        return 0;
+    } else if (p->times2[0].tv_sec <= p->times1[0].tv_sec) {
+        return 0;
+    } else if (p->times2[0].tv_sec == p->times1[0].tv_sec &&
+               p->times2[0].tv_nsec <= p->times1[0].tv_nsec) {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
 static void
-post_walk(const void *nodep, const VISIT which, const int depth)
+post_walk_1(const void *nodep, const VISIT which, const int depth)
 {
     pathentry_s *p = *((pathentry_s **)nodep);
-    int prereq = 0;
 
     (void)depth;
-    if (which == postorder || which == leaf) {
-        // If mtime has moved it's a target 
-        // and if atime hasn't moved it's unused.
-        if (p->times2[1].tv_sec > p->times1[1].tv_sec) {
-            // Fall through.
-        } else if (p->times2[1].tv_sec == p->times1[1].tv_sec &&
-                   p->times2[1].tv_nsec > p->times1[1].tv_nsec) {
-            // Fall through.
-        } else if (p->times2[0].tv_sec <= p->times1[0].tv_sec) {
-            // Fall through.
-        } else if (p->times2[0].tv_sec == p->times1[0].tv_sec &&
-                   p->times2[0].tv_nsec <= p->times1[0].tv_nsec) {
-            // Fall through.
+    if ((which != postorder && which != leaf) || !is_prereq(p)) {
+        return;
+    }
+    if (outfile) {
+        if (prq_count++) {
+            fputs(" \\\n  ", fp);
         } else {
-            prereq = 1;
-        }
-        if (prereq) {
-            if (outfile) {
-                if (prq_count++) {
-                    fputs(" \\\n  ", fp);
-                } else {
-                    const char *c, *e;
+            const char *c, *e;
 
-                    e = strrchr(outfile, '.');
-                    for (c = outfile; c < e; c++) {
-                        fputc(*c, fp);
-                    }
-                    fputs(": \\\n  ", fp);
-                }
-                fputs(p->path, fp);
-            } else {
-                fputs(p->path, fp);
-                fputc('\n', fp);
+            e = strrchr(outfile, '.');
+            for (c = outfile; c < e; c++) {
+                fputc(*c, fp);
             }
+            fputs(": \\\n  ", fp);
         }
+        fputs(p->path, fp);
+    } else {
+        fputs(p->path, fp);
+        fputc('\n', fp);
+    }
+}
+
+static void
+post_walk_2(const void *nodep, const VISIT which, const int depth)
+{
+    pathentry_s *p = *((pathentry_s **)nodep);
+
+    (void)depth;
+    if ((which != postorder && which != leaf) || !is_prereq(p)) {
+        return;
+    }
+    if (outfile) {
+        fprintf(fp, "\n%s:\n", p->path);
     }
 }
 
@@ -359,8 +376,11 @@ main(int argc, char *argv[])
         insist(nftw(path, nftw_post_callback, NOPENFD, FTW_MOUNT) != -1, path);
     }
 
-    twalk(tree2, post_walk);
+    twalk(tree2, post_walk_1);
     fputc('\n', fp);
+    if (outfile) {
+        twalk(tree2, post_walk_2);
+    }
 
     if (outfile) {
         fclose(fp);

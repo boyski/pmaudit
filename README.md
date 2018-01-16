@@ -160,7 +160,7 @@ is clean:
 
 Then build with the auditor inserted:
 
-% make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
+% make --eval='.ONESHELL:' SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
 
 And look at a typical generated dependency file:
 
@@ -181,7 +181,7 @@ job.o: \
   output.h \
   variable.h
 
-Feel free to compare with with GNU make's own generated deps file
+Feel free to compare this with GNU make's native generated deps file
 (.deps/job.Po) which contains data for system files as well.
 
 Let's break down the command line above. We use SHELL=pmash to force

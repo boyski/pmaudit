@@ -371,6 +371,8 @@ def main():
                     for i, prq in enumerate(prqs):
                         eol = ' \\\n' if i < len(prqs) - 1 else '\n'
                         f.write('  %s%s' % (prq, eol))
+                    for prq in prqs:
+                        f.write('\n%s:\n' % prq)
         else:
             with open(opts.save, 'w') as f:
                 json.dump(adb, f, indent=2)
