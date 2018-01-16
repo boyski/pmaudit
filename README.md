@@ -26,15 +26,15 @@ Invoke them with --help for detailed explanation, usage, and examples.
 ## The Programs
 
 There are two different tools here which rely on the same basic technique
-while having slightly different functions. Either can be used as a SHELL
+while having slightly different features. Either can be used as a SHELL
 replacement in make though of course the C program will be much faster.
 When used as shell wrappers they dump prerequisite data in "make"
-format.  Both may be told which directory(s) to monitor via the -W,
+format. Either may be told which directory(s) to monitor via the -W,
 --watch option.
 
 ### pmaudit
 
-Pmaudit is a Python script which may be used from the top level of a build.
+A Python script which may be used from the top level of a build.
 It derives a complete "database" of all files accessed (and not accessed)
 during the build and categorizes them as prerequisites, targets, etc
 as described previously. This database is useful for many things but
@@ -45,19 +45,18 @@ It can be used as a shell wrapper.
 
 ### pmash
 
-Pmash is a C program which operates as a wrapper over the shell. Due
-to being written in C it's much faster than pmaudit but more limited.
-It derives only per-target prerequisite data.
+A C program which operates as a wrapper over the shell. Due to being
+written in C it's much faster than pmaudit but more limited.  It derives
+only per-target prerequisite data.
 
 #### pmamake
 
-Pmamake is a tiny shell wrapper which exists to document ways by which
-either tool can be introduced into a GNU make build. It's intended
-solely as a demo.
+A tiny shell wrapper which exists to document ways by which either tool
+can be introduced into a GNU make build. It's intended solely as a demo.
 
 ## Uses of Build Auditing
 
-Here are a few examples of where build auditing could be useful.
+A few examples of where build auditing could be useful:
 
 ### Cleanup
 
@@ -93,9 +92,9 @@ e.g. the gcc -M option. File-level auditing is lagnuage-agnostic.
 
 ## What Could Go Wrong?
 
-Are there flaws in this system? Because of its radical simplicity and
-lack of ambition there isn't room for too many but here are those I
-can think of:
+Are there flaws in this system? Because of its radical simplicity
+and lack of ambition there isn't much room for bugs but plenty of
+limitations.  Here are some I can think of:
 
 ### Interference from another process
 
@@ -115,7 +114,8 @@ us derive a complete dependency graph while at the same time ruling out
 parallelism so what's the point? The best answer for now is that it may
 be helpful to generate/update dependency data in a scheduled (hourly,
 daily, etc) serial build and let developers rely on that slightly stale
-data. Or use it occasionally to find gaps in hardwired data, or similar.
+data. Or use it occasionally to find gaps in hardwired data, or to
+debug a particular intermittent build race, etc.
 
 ### Permission problems
 
@@ -126,22 +126,78 @@ basically extends the ownership requirement to prerequisite files.
 
 ### Unseen files
 
-The script needs to know which files to monitor and files in an
+The script needs to know which files to monitor, and files in an
 unmonitored area will not be recorded. This can be seen as a feature or
-a bug. For instance, if compiling a collection of .c and .h files do
+a bug. For instance, when compiling a collection of .c and .h files do
 you want it to record /usr/include/stdio.h as one of the prereqisites
 or is that TMI? Regardless, it will only record accesses to files in
-monitored locations.
+monitored locations and monitored locations must generally be writable.
 
 ### Atimes not updated due to mount settings
 
-This is a big one but there's a test to detect it. It's really a system
-admin issue, not something the script can deal with, so it just dies
-when atimes aren't behaving.
+This is a big one but there's a test to detect it. System admins often
+turn off atime updating on NFS as a performance enhancer. This is
+really a system admin issue, not something the script can deal with,
+so it just dies when atimes aren't behaving. It's possible that system
+admins could be convinced to use the relatively new "relatime" feature
+rather than turning off atime updates altogether.
 
 ### Weak granularity of file timestamps
 
-This is a common issue. Many filesystems still record only seconds
+Another common issue. Some filesystems still record only seconds
 or milliseconds and the resulting roundoff errors can lead to bogus
-results. Best to use it on high-resolution filesystems such as Linux
+results. It works best on high-resolution filesystems such as Linux
 ext4 which records nanoseconds.
+
+# Example
+
+A good sample use is building GNU make itself (of course it already
+generates its own dependency data but we're going to ignore that).
+First we unpack and configure version 4.2.1 and make sure the state
+is clean:
+
+% make clean >clean.log
+
+Then build with the auditor inserted:
+
+% make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
+
+And look at a typical generated dependency file:
+
+% cat job.o.d
+job.o: \
+  commands.h \
+  config.h \
+  debug.h \
+  filedef.h \
+  getopt.h \
+  gettext.h \
+  gnumake.h \
+  hash.h \
+  job.c \
+  job.h \
+  makeint.h \
+  os.h \
+  output.h \
+  variable.h
+
+Feel free to compare with with GNU make's own generated deps file
+(.deps/job.Po) which contains data for system files as well.
+
+Let's break down the command line above. We use SHELL=pmash to force
+make to use our auditor as a shell wrapper and .SHELLFLAGS to control
+the flags passed to it; in particular it takes the usual -c option and
+passes that command line to the shell. We add "-o $@.d" to send pmash
+output to foo.d when building foo.
+
+The use of .ONESHELL is necessary to cause all build activity for the
+target to take place in a single shell process. Otherwise, since each
+recipe line is a different shell and they share the same value of $@
+the output file would be overwritten. Here GNU make is a good example:
+the recipe for each object file tends to look like this (simplified):
+
+    gcc -MT job.o -MD -MP -MF .deps/job.Tpo -c -o job.o job.c
+    mv -f .deps/job.Tpo .deps/job.Po
+
+Without .ONESHELL the mv command would run last and in its own shell
+so we'd end up recording only the actions of mv, not gcc.
