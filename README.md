@@ -168,16 +168,45 @@ automake, are complex and stateful. Some may present corner cases which
 require careful and holistic thought aka "what in the shell is going
 on here?". In particular .ONESHELL may be needed (vide infra).
 
-# Example
+# EXAMPLES
 
 A good sample use is building GNU make itself (which already generates
 its own dependency data but we're going to ignore that). First we unpack
 and configure version 4.2.1 and use "make clean" to be sure the state
-is fresh, then build with the auditor inserted:
+is fresh.
+
+## Black Box Auditing
+
+A complete black-box audit from the top:
+
+% pmaudit -o pmaudit.json -- make > /dev/null
+
+This leaves us with a little JSON database:
+
+% wc pmaudit.json
+  493   980 38058 pmaudit.json
+
+Which we can query to see that there were 115 involved files of which
+56 were prerequisites, 58 intermediates, and 1 final target which is
+of course "make":
+
+% pmaudit pmaudit.json -A | wc
+115     115    1312
+% pmaudit pmaudit.json -P | wc
+56      56     592
+% pmaudit pmaudit.json -I | wc
+58      58     715
+% pmaudit pmaudit.json -F
+make
+
+## Per-Target Auditing
+
+Alternatively (and after another make clean) we can build with the
+auditor inserted on a per-recipe basis by overriding the shell:
 
 % make --eval='.ONESHELL:' SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
 
-Here's one of the generated dependency files:
+And here's one of the generated dependency files:
 
 % cat job.o.d
 job.o: \
@@ -200,10 +229,10 @@ Compare this with GNU make's native generated deps file (.deps/job.Po)
 which contains data for system files as well.
 
 Let's break down the command line above. SHELL=pmash is used to force
-make to use the auditor as a shell wrapper and .SHELLFLAGS controls the
-flags passed to it; in particular pmash takes the usual -c string and
-passes it to the shell. It adds "-o $@.d" to send derived prereq data
-to foo.d when building foo.
+make to use the auditor as a shell wrapper and .SHELLFLAGS controls
+the flags passed to it; in particular pmash takes the usual -c string
+and passes it to the shell. It also accepts "-o $@.d" to send derived
+prereq data to foo.d when building foo.
 
 The use of .ONESHELL is needed to cause build activity for each target
 to take place in a single shell process. Otherwise, since each recipe
