@@ -118,6 +118,7 @@ FMTN = ','.join(['-2,-1', FMT])
 FMTU = ','.join([FMT, '0,0'])
 
 BASE = 'BASE'
+CMD = 'CMD'
 START = 'START'
 PRIOR_COUNT = 'PRIOR_COUNT'
 AFTER_COUNT = 'AFTER_COUNT'
@@ -198,7 +199,7 @@ class PMAudit(object):
 
         self.reftime = time.time()
 
-    def finish(self):
+    def finish(self, cmd=None):
         """End the audit, return the result."""
 
         # Record the set of surviving files with their times,
@@ -271,6 +272,7 @@ class PMAudit(object):
         # Build up and return a serializable database.
         root = collections.OrderedDict()
         root[BASE] = '%s:%s' % (socket.gethostname(), os.getcwd())
+        root[CMD] = str(cmd)
         dt = datetime.datetime.utcfromtimestamp(self.reftime)
         refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         root[START] = '%s (%f)' % (refstr, self.reftime)
@@ -362,7 +364,7 @@ def main():
         audit = PMAudit(wdirs, exclude=(os.path.basename(opts.save),))
         audit.start()
         rc = subprocess.call(cmd)
-        adb = audit.finish()
+        adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
         if opts.cmd:
             prqs = adb[DB][PREREQS]
             if prqs:
