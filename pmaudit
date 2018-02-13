@@ -376,6 +376,9 @@ def main():
                     for prq in prqs:
                         f.write('\n%s:\n' % prq)
         else:
+            savedir = os.path.dirname(opts.save)
+            if savedir and not os.path.exists(savedir):
+                os.makedirs(savedir)
             with open(opts.save, 'w') as f:
                 json.dump(adb, f, indent=2)
                 f.write('\n')
