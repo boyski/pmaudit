@@ -1,6 +1,4 @@
-# Poor Man's Audit[*]
-
-[*] With apologies for the implied classism and sexism :-)
+# Poor Man's File Auditor[*]
 
 This project comprises two programs which act as build auditors. A
 build auditor is a tool which runs a software build (or really any
@@ -245,3 +243,5 @@ the recipe for each object file looks like this (simplified):
 
 Without .ONESHELL the mv command would run last and in its own shell
 so jobs.o.d would end up recording only the actions of mv, not gcc.
+
+[*] With apologies for the implied classism and sexism :-)
