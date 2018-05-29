@@ -72,7 +72,7 @@ EXAMPLES:
 
 Run an audited make command and leave the results in %(prog)s.json:
 
-    make clean; %(prog)s -o %(prog)s.json -- make
+    make -C subdir clean; %(prog)s -o %(prog)s.json -- make -C subdir ...
 
 Dump the prerequisite set derived by the audit above:
 
