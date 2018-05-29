@@ -64,9 +64,9 @@ a modern Linux filesystem which records nanoseconds or similar.  It's not
 that nanosecond precision per se is required, just that the more precision
 the better.
 
-As with any file-auditing technology it might expose underlying weaknesses
-in the build model. I.e. if a file shows up in the wrong category it may
-reveal a race condition.
+As with any file-auditing technology this might expose underlying
+weaknesses in the build model. I.e. if a file shows up in the wrong
+category it may reveal a race condition.
 
 EXAMPLES:
 
@@ -76,11 +76,11 @@ Run an audited make command and leave the results in %(prog)s.json:
 
 Dump the prerequisite set derived by the audit above:
 
-    %(prog)s -p %(prog)s.json
+    %(prog)s -P %(prog)s.json
 
 Dump the discovered targets, both intermediate and final:
 
-    %(prog)s -t %(prog)s.json
+    %(prog)s -T %(prog)s.json
 """
 
 ###############################################################################
