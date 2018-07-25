@@ -38,8 +38,8 @@ and unused. This database is useful for many things but it does not
 have data with sufficient granularity to tell you which prereqs were
 required by which targets.
 
-It can be used as a shell wrapper. In this mode it's equivalent to
-pmash, generating per-target dependency data in make format.
+It can also be used as a shell wrapper. In this mode it's equivalent to
+pmash, generating per-target dependency data in make format, but slower.
 
 ### pmash
 
@@ -92,10 +92,10 @@ e.g. the gcc -M option. File-level auditing is language-agnostic.
 
 Are there flaws in this system? Because of its radical simplicity
 and lack of ambition there isn't much room for bugs but plenty of
-limitations. In general, auditing the entire build from the top
-as a black box is fairly robust as long as your filesystem updates
-atimes and you have required permissions. Auditing on a per-recipe
-basis can be more finicky.
+limitations. In general, auditing the entire build from the top as a
+black box is fairly robust as long as your filesystem updates atimes
+and you have the required permissions. Auditing on a per-recipe basis
+can be more finicky.
 
 Here are some concerns I can think of:
 
@@ -113,12 +113,12 @@ the same as above with the interference coming from within.
 
 Of course this raises a conundrum; much of the value in having a complete
 dependency graph is that it enables robust parallelism. This tool helps
-us derive a complete dependency graph while at the same time ruling out
-parallelism so what's the point? The best answer for now is that it may
-be helpful to generate/update dependency data in a scheduled (hourly,
-daily, etc) serial build and let developers rely on that slightly
-stale data. Or use it occasionally to find gaps in hardwired data,
-or to debug a particular build race, etc.
+us derive a complete dependency graph while at the same time ruling
+out parallelism so what's the point? The best answer for now is that
+it may be helpful to generate/update dependency data in a scheduled
+(hourly, daily, etc) serial build and let developers rely on that
+slightly stale data to do parallel builds. Or use it occasionally to
+find gaps in hardwired data, or to debug a particular build race, etc.
 
 ### Permission Problems
 
@@ -134,7 +134,8 @@ unmonitored area will not be recorded. This can be seen as a feature or
 a bug. For instance, when compiling a collection of .c and .h files do
 you want it to record /usr/include/stdio.h as one of the prereqisites
 or is that TMI? Regardless, it will only record accesses to files in
-monitored locations and monitored locations must generally be writable.
+monitored locations, which can be listed with an option, and monitored
+locations must generally be writable.
 
 ### Atimes Not Updated Due to Mount Settings
 
@@ -149,8 +150,8 @@ rather than turning off atime updates altogether.
 
 Another common issue. Some filesystems still record only seconds
 or milliseconds and the resulting roundoff errors can lead to bogus
-results. It works best on high-resolution filesystems such as Linux
-ext4 which records nanoseconds.
+results. This technique works best on high-resolution filesystems such
+as Linux ext4 which records nanoseconds.
 
 ### Difference From Traditional Dependency Generation
 
@@ -190,10 +191,13 @@ of course "make":
 
 % pmaudit pmaudit.json -A | wc
 115     115    1312
+
 % pmaudit pmaudit.json -P | wc
 56      56     592
+
 % pmaudit pmaudit.json -I | wc
 58      58     715
+
 % pmaudit pmaudit.json -F
 make
 
