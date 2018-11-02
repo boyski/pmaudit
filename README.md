@@ -105,11 +105,14 @@ If some unrelated process comes over and opens files in the audit area
 during the run the results will of course be contaminated. So don't
 do that.
 
-### No Support For Parallelism
+### No Support For Parallelism At The Shell Level
 
-Because this technique involves sampling the states of files before and
-after, parallel processes would interfere with it. This is really just
-the same as above with the interference coming from within.
+Because the "pmash" technique involves sampling the states of files
+before and after parallel processes would interfere with it. This is
+really just the same as above with the interference coming from within.
+It's not a problem for black-box auditing since all changes are subsumed
+into one transaction; it's only per-shell pmash-style auditing that
+has parallelism restrictions.
 
 Of course this raises a conundrum; much of the value in having a complete
 dependency graph is that it enables robust parallelism. This tool helps

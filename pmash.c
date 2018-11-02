@@ -37,11 +37,11 @@
 
 #define NOPENFD 20
 
-static char short_opts[] = "c:eo:VW:";
+static char short_opts[] = "c:d:eVW:";
 static struct option long_opts[] = {
    {"command", required_argument, NULL, 'c'},
+   {"depsfile", required_argument, NULL, 'd'},
    {"errexit", no_argument, NULL, 'e'},
-   {"outfile", required_argument, NULL, 'o'},
    {"verbose", no_argument, NULL, 'V'},
    {"watch", required_argument, NULL, 'W'},
    {"help", no_argument, NULL, 'h'},
@@ -59,26 +59,26 @@ typedef struct {
 static void *tree1, *tree2;
 
 static FILE *fp;
-static char *outfile;
+static char *depsfile;
 static unsigned verbosity;
 static unsigned prq_count;
 
 static void
 usage(int rc)
 {
-    FILE *fp = (rc == EXIT_SUCCESS) ? stdout : stderr;
+    FILE *f = (rc == EXIT_SUCCESS) ? stdout : stderr;
     const char *fmt = "   %-18s %s\n";
 
-    fprintf(fp, "Usage: %s -c <cmd> [-o <outfile>] [-W dir[,dir,...]]\n", prog);
-    fprintf(fp, fmt, "-h/--help", "Print this usage summary");
-    fprintf(fp, fmt, "-c/--command", "Command to invoke");
-    fprintf(fp, fmt, "-e/--errexit", "Exit on first error");
-    fprintf(fp, fmt, "-o/--outfile", "File path to save prereq list");
-    fprintf(fp, fmt, "-V/--verbose", "Bump verbosity mode");
-    fprintf(fp, fmt, "-W/--watch", "Directories to monitor (default='.')");
-    fprintf(fp, "\nEXAMPLES:\n\n");
-    fprintf(fp, "Compile foo.o leaving prereq data in foo.o.d:\n\n");
-    fprintf(fp, "    %s -c 'gcc -c foo.c' -o foo.o.d\n", prog);
+    fprintf(f, "Usage: %s -c <cmd> [-d <depsfile>] [-W dir[,dir,...]]\n", prog);
+    fprintf(f, fmt, "-h/--help", "Print this usage summary");
+    fprintf(f, fmt, "-c/--command", "Command to invoke");
+    fprintf(f, fmt, "-d/--depsfile", "File path to save dependency list");
+    fprintf(f, fmt, "-e/--errexit", "Exit on first error");
+    fprintf(f, fmt, "-V/--verbose", "Bump verbosity mode");
+    fprintf(f, fmt, "-W/--watch", "Directories to monitor (default='.')");
+    fprintf(f, "\nEXAMPLES:\n\n");
+    fprintf(f, "Compile foo.o leaving prereq data in foo.o.d:\n\n");
+    fprintf(f, "    %s -c 'gcc -c foo.c' --depsfile=foo.o.d\n", prog);
     exit(rc);
 }
 
@@ -212,14 +212,14 @@ post_walk_1(const void *nodep, const VISIT which, const int depth)
     if ((which != postorder && which != leaf) || !is_prereq(p)) {
         return;
     }
-    if (outfile) {
+    if (depsfile) {
         if (prq_count++) {
             fputs(" \\\n  ", fp);
         } else {
             const char *c, *e;
 
-            e = strrchr(outfile, '.');
-            for (c = outfile; c < e; c++) {
+            e = strrchr(depsfile, '.');
+            for (c = depsfile; c < e; c++) {
                 fputc(*c, fp);
             }
             fputs(": \\\n  ", fp);
@@ -240,7 +240,7 @@ post_walk_2(const void *nodep, const VISIT which, const int depth)
     if ((which != postorder && which != leaf) || !is_prereq(p)) {
         return;
     }
-    if (outfile) {
+    if (depsfile) {
         fprintf(fp, "\n%s:\n", p->path);
     }
 }
@@ -271,11 +271,11 @@ main(int argc, char *argv[])
             case 'c':
                 cmdstr = optarg;
                 break;
+            case 'd':
+                depsfile = optarg;
+                break;
             case 'e':
                 eflag++;
-                break;
-            case 'o':
-                outfile = optarg;
                 break;
             case 'V':
                 verbosity++;
@@ -302,8 +302,12 @@ main(int argc, char *argv[])
         }
     }
 
-    if (outfile) {
-        insist((fp = fopen(outfile, "w")) != NULL, outfile);
+    if (depsfile) {
+        if ((fp = fopen(depsfile, "w")) == NULL) {
+            fprintf(stderr, "%s: Warning: skipping %s: %s\n",
+                    prog, depsfile, strerror(errno));
+            return 0;
+        }
     } else {
         fp = stdout;
     }
@@ -372,25 +376,29 @@ main(int argc, char *argv[])
         rc = EXIT_FAILURE;
     }
 
+    if (!fp) {
+        return rc;
+    }
+
     for (path = strtok(strdup(watchdirs), ","); path; path = strtok(NULL, ",")) {
         insist(nftw(path, nftw_post_callback, NOPENFD, FTW_MOUNT) != -1, path);
     }
 
     twalk(tree2, post_walk_1);
     fputc('\n', fp);
-    if (outfile) {
+    if (depsfile) {
         twalk(tree2, post_walk_2);
     }
 
-    if (outfile) {
+    if (depsfile) {
         fclose(fp);
         // Don't keep empty deps files around.
         if (!prq_count) {
-            insist(unlink(outfile) != -1, outfile);
+            insist(unlink(depsfile) != -1, depsfile);
         }
     }
 
-    exit(rc);
+    return rc;
 }
 
 // vim: ts=8:sw=4:tw=80:et:

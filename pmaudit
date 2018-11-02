@@ -336,7 +336,7 @@ def main():
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
         if '--' in sys.argv:
             parser.add_argument(
-                '-o', '--save', default='%s.json' % PROG,
+                '-j', '-o', '--save', default='%s.json' % PROG,
                 metavar='FILE',
                 help="save audit data to FILE (default=%(default)s)")
             opts, cmd = parser.parse_known_args()
@@ -347,7 +347,7 @@ def main():
             sys.stderr.write('+ %s\n' % ' '.join(cmd))
         else:
             parser.add_argument(
-                '-o', '--save', required=True,
+                '-j', '-o', '--save', required=True,
                 metavar='FILE',
                 help="save audit data to FILE")
             opts = parser.parse_args()
@@ -386,7 +386,7 @@ def main():
 
     db_parser = parser.add_mutually_exclusive_group()
     db_parser.add_argument(
-        '-o', '--save', default='%s.json' % PROG,
+        '-j', '-o', '--save', default='%s.json' % PROG,
         metavar='FILE',
         help="save audit data to FILE (default=%(default)s)")
     db_parser.add_argument(
