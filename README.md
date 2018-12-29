@@ -146,8 +146,8 @@ and monitored locations must generally be writable.
 The simplest approach here is to start the build from the base of the
 source tree using the GNU make -C option or equivalent e.g.:
 
-$ cd sub/dir && pmaudit ... -- make ...       # BAD
-$ pmaudit ... -- make -C sub/dir ...          # GOOD
+    $ cd sub/dir && pmaudit ... -- make ...       # BAD
+    $ pmaudit ... -- make -C sub/dir ...          # GOOD
 
 ### Atimes Not Updated Due to Mount Settings
 
