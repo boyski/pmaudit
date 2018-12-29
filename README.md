@@ -8,18 +8,18 @@ can derive the set of files consumed by the build, the set produced by
 it, and those ignored by it.
 
 Most build-auditing (aka file auditing) tools are complex and expensive
-(in both senses of the word). They may involve a custom filesystem,
-server processes, or rely on ptrace (essentially running audited
-processes in the debugger).  This system is at the other end of the
-spectrum: it's very simple and unambitious, relying only on standard
-Unix filesystem semantics, and with minimal performance cost (aside
-from the loss of parallelism, see below).
+(in both senses of the word). They may involve a custom filesystem
+(such as ClearCase), server processes, or rely on ptrace (essentially
+running audited processes in the debugger).  This system is at the other
+end of the spectrum: it's very simple and unambitious, relying only on
+standard Unix filesystem semantics, and with minimal performance cost
+(aside from the loss of parallelism, see below).
 
 One tool (pmaudit) is written in Python, the other (pmash) is a C program
 using similar techniques.  Naturally pmash is much faster but pmaudit is
 more flexible. Either can be used as a shell wrapper. See details below.
 
-Invoke them with --help for detailed explanation, usage, and examples.
+Invoke either with --help for detailed explanation, usage, and examples.
 
 ## The Programs
 
@@ -31,8 +31,8 @@ format.
 
 ### pmaudit
 
-A Python script which may be used from the top level of a build.
-It derives a complete "database" of all files accessed (and not accessed)
+A Python script typically used from the top level of a build. In this mode
+it derives a complete "database" of all files accessed (and not accessed)
 during the build and categorizes them as prerequisites, targets,
 and unused. This database is useful for many things but it does not
 have data with sufficient granularity to tell you which prereqs were
@@ -40,8 +40,6 @@ required by which targets.
 
 It can also be used as a shell wrapper. In this mode it's equivalent to
 pmash, generating per-target dependency data in make format, but slower.
-In this more it *can* tell you which files were used by which target;
-see below.
 
 ### pmash
 
