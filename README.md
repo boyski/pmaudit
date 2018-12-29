@@ -1,11 +1,11 @@
 # Poor Man's File Auditor[*]
 
-This project comprises two programs which act as build auditors. A
-build auditor is a tool which runs a software build (or really any
-process which reads a set of input files and produces a set of output
-files) and afterward can report which files were which. In other words
-an audit can tell you the list of files consumed by the build, those
-created during it, and ignored by it.
+This project comprises two programs which act as build auditors. A build
+auditor is a tool which runs a software build (or really any process
+which reads a set of input files and produces a set of output files)
+and afterward can report which files were which. In other words an audit
+can derive the set of files consumed by the build, the set produced by
+it, and those ignored by it.
 
 Most build-auditing (aka file auditing) tools are complex and expensive
 (in both senses of the word). They may involve a custom filesystem,
@@ -26,7 +26,7 @@ Invoke them with --help for detailed explanation, usage, and examples.
 There are two different tools here which rely on the same basic technique
 while having slightly different features. Either can be used as a shell
 replacement in make though of course the C program will be much faster.
-When used as shell wrappers they dump prerequisite data in "make"
+When used as shell wrappers they dump prerequisite data in GNU make
 format.
 
 ### pmaudit
@@ -40,6 +40,8 @@ required by which targets.
 
 It can also be used as a shell wrapper. In this mode it's equivalent to
 pmash, generating per-target dependency data in make format, but slower.
+In this more it *can* tell you which files were used by which target;
+see below.
 
 ### pmash
 
@@ -49,8 +51,8 @@ only per-target prerequisite data.
 
 ### pmamake
 
-A tiny shell wrapper which exists to document ways by which either tool
-can be introduced into a GNU make build. It's intended solely as a demo.
+A tiny shell wrapper provided to document ways by which either tool could
+be introduced into a GNU make build. It's intended solely as a demo.
 
 ## Uses of Build Auditing
 
@@ -86,16 +88,17 @@ If we know the exact set of files required to build a particular object
 file we can pass it to "make" or similar to create a complete dependency
 graph resulting in more reliable and/or parallelizable builds. There
 are many existing solutions to this but most are language-specific
-e.g. the gcc -M option. File-level auditing is language-agnostic.
+e.g. the gcc -M option. File-level auditing has the benefit of being
+language-agnostic.
 
 ## What Could Go Wrong?
 
 Are there flaws in this system? Because of its radical simplicity
 and lack of ambition there isn't much room for bugs but plenty of
 limitations. In general, auditing the entire build from the top as a
-black box is fairly robust as long as your filesystem updates atimes
-and you have the required permissions. Auditing on a per-recipe basis
-can be more finicky.
+black box is fairly robust as long as your filesystem is configured
+to update atimes and you have the required permissions. Auditing on a
+per-recipe basis can be more finicky.
 
 Here are some concerns I can think of:
 
@@ -103,21 +106,21 @@ Here are some concerns I can think of:
 
 If some unrelated process comes over and opens files in the audit area
 during the run the results will of course be contaminated. So don't
-do that.
+do that. Of course this could be a problem for an unaudited build too.
 
 ### No Support For Parallelism At The Shell Level
 
 Because the "pmash" technique involves sampling the states of files
-before and after parallel processes would interfere with it. This is
+before and after, parallel processing could interfere with it. This is
 really just the same as above with the interference coming from within.
-It's not a problem for black-box auditing since all changes are subsumed
-into one transaction; it's only per-shell pmash-style auditing that
-has parallelism restrictions.
+It's not a problem for top-level, black-box auditing since all changes
+are subsumed into one transaction; it's only per-shell or per-target
+pmash-style auditing that has parallelism restrictions.
 
 Of course this raises a conundrum; much of the value in having a complete
 dependency graph is that it enables robust parallelism. This tool helps
 us derive a complete dependency graph while at the same time ruling
-out parallelism so what's the point? The best answer for now is that
+out parallelism, so what's the point? The best answer for now is that
 it may be helpful to generate/update dependency data in a scheduled
 (hourly, daily, etc) serial build and let developers rely on that
 slightly stale data to do parallel builds. Or use it occasionally to
@@ -137,17 +140,23 @@ unmonitored area will not be recorded. This can be seen as a feature or
 a bug. For instance, when compiling a collection of .c and .h files do
 you want it to record /usr/include/stdio.h as one of the prereqisites
 or is that TMI? Regardless, it will only record accesses to files in
-monitored locations, which can be listed with an option, and monitored
-locations must generally be writable.
+monitored locations, which can be configured with the --watch option,
+and monitored locations must generally be writable.
+
+The simplest approach here is to start the build from the base of the
+source tree using the GNU make -C option or equivalent e.g.:
+
+$ cd sub/dir && pmaudit ... -- make ...       # BAD
+$ pmaudit ... -- make -C sub/dir ...          # GOOD
 
 ### Atimes Not Updated Due to Mount Settings
 
-This is a big one but there's a test to detect it. System admins often
-turn off atime updating on NFS as a performance enhancer. This is
-really a system admin issue, not something the script can deal with,
-so it just dies when atimes aren't behaving. It's possible that system
-admins could be convinced to use the relatively new "relatime" feature
-rather than turning off atime updates altogether.
+This is a big one but the tools run a test to detect it. System admins
+often turn off atime updating on NFS as a performance enhancer. This is
+really a system admin issue, not something the script can deal with, so
+it just dies when atimes aren't behaving. Consider asking system (NFS)
+administrators to use the relatively new "relatime" feature rather than
+turning off atime updates altogether.
 
 ### Weak Granularity of File Timestamps
 
@@ -161,7 +170,8 @@ as Linux ext4 which records nanoseconds.
 Not a flaw, just a fact: usual dependency generation techniques such as
 gcc -M restrict themselves to a given language but file-level auditing
 records every file read or written. Thus it may include not just .h
-files but makefiles, shell scripts, etc.
+files but makefiles, shell scripts, etc. This is generally considered
+a feature.
 
 ### Tricky Shell Scripting
 
@@ -174,8 +184,8 @@ on here?". In particular .ONESHELL may be needed (vide infra).
 
 A good sample use is building GNU make itself (which already generates
 its own dependency data but we're going to ignore that). First we unpack
-and configure version 4.2.1 and use "make clean" to be sure the state
-is fresh.
+and configure GNU make version 4.2.1 and use "make clean" to be sure
+its state is fresh.
 
 ## Black Box Auditing
 
@@ -190,7 +200,7 @@ This leaves us with a little JSON database:
 
 Which we can query to see that there were 115 involved files of which
 56 were prerequisites, 58 intermediates, and 1 final target which is
-of course "make":
+of course the executable file "make":
 
 % pmaudit pmaudit.json -A | wc
 115     115    1312
@@ -211,7 +221,8 @@ auditor inserted on a per-recipe basis by overriding the shell:
 
 % make --eval='.ONESHELL:' SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
 
-And here's one of the generated dependency files:
+This will run each recipe using "pmash -o <target>.d -c <recipe>".
+Here's one of the dependency files it generates:
 
 % cat job.o.d
 job.o: \
