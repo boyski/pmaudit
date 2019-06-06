@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
 """
 Run a command with file auditing or query the resulting audit data.
 
@@ -106,6 +106,7 @@ import json
 import logging
 import os
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -127,6 +128,39 @@ INTERMEDIATES = 'INTERMEDIATES'
 FINALS = 'FINALS'
 UNUSED = 'UNUSED'
 DB = 'DB'
+
+
+# **NOTE** this is a copy from Python2 os.path.walk() since that function
+# has been removed in Python3 in favor of os.walk(). Unfortunately os.walk
+# tends to update atimes so we can't use it.
+def os_path_walk(top, func, arg):
+    """Directory tree walk with callback function.
+
+    For each directory in the directory tree rooted at top (including top
+    itself, but excluding '.' and '..'), call func(arg, dirname, fnames).
+    dirname is the name of the directory, and fnames a list of the names of
+    the files and subdirectories in dirname (excluding '.' and '..').  func
+    may modify the fnames list in-place (e.g. via del or slice assignment),
+    and walk will only recurse into the subdirectories whose names remain in
+    fnames; this can be used to implement a filter, or to impose a specific
+    order of visiting.  No semantics are defined for, or required of, arg,
+    beyond that arg is always passed to func.  It can be used, e.g., to pass
+    a filename pattern, or a mutable object designed to accumulate
+    statistics.  Passing None for arg is common."""
+
+    try:
+        names = os.listdir(top)
+    except OSError:
+        return
+    func(arg, top, names)
+    for name in names:
+        name = os.path.join(top, name)
+        try:
+            st = os.lstat(name)
+        except OSError:
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            os_path_walk(name, func, arg)
 
 
 class PMAudit(object):
@@ -212,12 +246,12 @@ class PMAudit(object):
         # "pre-atime,pre-mtime,post-atime,post-mtime".
         # This data isn't needed once files have been categorized
         # but may be helpful in analysis or debugging.
-        # Note: we can't use os.walk() here because it has a way
-        # of updating symlink atimes.
+        # Note: we can't use os.walk() for this because it has a
+        # way of updating symlink atimes.
         prereqs, intermediates, finals, unused = {}, {}, {}, {}
 
         def visit(prunedirs, parent, fnames):
-            """Callback function for os.path.walk() to categorize files."""
+            """Callback function for os_path_walk() to categorize files."""
             for prunedir in prunedirs:
                 if parent.startswith(prunedir):
                     return
@@ -260,8 +294,9 @@ class PMAudit(object):
                         intermediates[path] = val
                     else:
                         finals[path] = val
+
         for watchdir in self.watchdirs:
-            os.path.walk(watchdir, visit, set())
+            os_path_walk(watchdir, visit, set())  # pylint: disable=no-member
 
         # Sort the data just derived. Not needed but helps readability.
         for k in sorted(prereqs):
