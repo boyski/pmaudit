@@ -217,9 +217,9 @@ make
 Alternatively (and after another make clean) we can build with the
 auditor inserted on a per-recipe basis by overriding the shell:
 
-% make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
+% make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-d $@.d -c' > make.log 2>&1
 
-This will run each recipe using "pmash -o [target].d -c 'recipe'".
+This will run each recipe using "pmash -d [target].d -c 'recipe'".
 Here's one of the dependency files it generates:
 
 % cat job.o.d
@@ -245,7 +245,7 @@ which contains data for system files as well.
 Let's break down the command line above. SHELL=pmash is used to force
 make to use the auditor as a shell wrapper and .SHELLFLAGS controls
 the flags passed to it; in particular pmash takes the usual -c string
-and passes it to the shell. It also accepts "-o $@.d" to send derived
+and passes it to the shell. It also accepts "-d $@.d" to send derived
 prereq data to foo.d when building foo.
 
 The use of .ONESHELL is needed to cause build activity for each target

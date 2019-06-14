@@ -9,5 +9,5 @@
 # Tweak as desired. This is only a demo.
 
 set -x
-#make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='-j $@.d -c' "$@"
-make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-j $@.d -c' "$@"
+#make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='-d $@.d -c' "$@"
+make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-d $@.d -c' "$@"
