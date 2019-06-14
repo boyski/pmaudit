@@ -78,7 +78,7 @@ usage(int rc)
     fprintf(f, fmt, "-W/--watch", "Directories to monitor (default='.')");
     fprintf(f, "\nEXAMPLES:\n\n");
     fprintf(f, "Compile foo.o leaving prereq data in foo.o.d:\n\n");
-    fprintf(f, "    %s -c 'gcc -c foo.c' --depsfile=foo.o.d\n", prog);
+    fprintf(f, "    %s --depsfile=foo.o.d -c 'gcc -c foo.c'\n", prog);
     exit(rc);
 }
 

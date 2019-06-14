@@ -102,6 +102,7 @@ Dump the discovered targets, both intermediate and final:
 import argparse
 import collections
 import datetime
+import fcntl
 import json
 import logging
 import os
@@ -129,10 +130,14 @@ FINALS = 'FINALS'
 UNUSED = 'UNUSED'
 DB = 'DB'
 
+# I don't think the mtime - atime delta matters except
+# that it must be >1 second to avoid roundoff errors.
+DELTA = 24 * 60 * 60
+
 
 # **NOTE** this is a copy from Python2 os.path.walk() since that function
 # has been removed in Python3 in favor of os.walk(). Unfortunately os.walk
-# tends to update atimes so we can't use it.
+# tends to update symlink atimes so we can't use it.
 def os_path_walk(top, func, arg):
     """Directory tree walk with callback function.
 
@@ -179,7 +184,7 @@ class PMAudit(object):
         self.reftime = None
         self.prior = {}
 
-    def start(self, keep_going=False):
+    def start(self, flush_host=None, keep_going=False):
         """
         Start the build audit.
 
@@ -199,6 +204,33 @@ class PMAudit(object):
             sys.exit(2)
 
         for watchdir in self.watchdirs:
+            # Figure out how atime updates are handled in this filesystem.
+            ref_fname = os.path.join(watchdir, '.audit.%d.tmp' % os.getpid())
+            with open(ref_fname, 'w') as f:
+                f.write('data\n')
+                ostats = os.fstat(f.fileno())
+            os.utime(ref_fname, (ostats.st_mtime - DELTA, ostats.st_mtime))
+            with open(ref_fname) as f:
+                f.read()
+            nstats = os.stat(ref_fname)
+            needflush = nstats.st_atime < nstats.st_mtime
+            if needflush:
+                nfs_flush({ref_fname: (nstats.st_atime, nstats.st_mtime,
+                                       True)}, host=flush_host)
+                with open(ref_fname) as f:
+                    f.read()
+                nstats = os.stat(ref_fname)
+                apath = os.path.dirname(os.path.abspath(ref_fname))
+                if nstats.st_atime < nstats.st_mtime:
+                    msg = 'atimes not updated in %s' % apath
+                    if not keep_going:
+                        logging.error(msg)
+                        sys.exit(2)
+                    logging.warning(msg)
+                else:
+                    logging.info('NFS flush required in %s', apath)
+            os.remove(ref_fname)
+
             for parent, dnames, fnames in os.walk(watchdir):
                 dnames[:] = (dn for dn in dnames if dn not in self.exclude)
                 for fname in fnames:
@@ -212,28 +244,11 @@ class PMAudit(object):
                     stats = os.stat(path)
                     atime, mtime = (stats.st_atime, stats.st_mtime)
                     if atime >= mtime:
-                        atime = mtime - 1
+                        atime = mtime - DELTA
                         os.utime(path, (atime, mtime))
-                    self.prior[path] = (atime, mtime)
+                    self.prior[path] = (atime, mtime, needflush)
 
-            # Disallow the audit run if atime updates are disabled.
-            ref_fname = os.path.join(watchdir, '.audit.%d.tmp' % os.getpid())
-            with open(ref_fname, 'w') as f:
-                f.write('data\n')
-                ostats = os.fstat(f.fileno())
-            os.utime(ref_fname, (ostats.st_mtime - 1, ostats.st_mtime))
-            with open(ref_fname) as f:
-                f.read()
-            nstats = os.stat(ref_fname)
-            os.remove(ref_fname)
-            if nstats.st_atime < nstats.st_mtime:
-                msg = 'atimes not updated in %s filesystem' % (
-                    os.path.dirname(os.path.abspath(ref_fname)))
-                if keep_going:
-                    logging.warning(msg)
-                else:
-                    logging.error(msg)
-                    sys.exit(2)
+        nfs_flush(self.prior, host=flush_host)
 
         self.reftime = time.time()
 
@@ -269,7 +284,7 @@ class PMAudit(object):
                 pstate = self.prior.get(path)
                 if pstate:
                     if atime > pstate[0]:
-                        val = FMT2 % (pstate + (atime, mtime))
+                        val = FMT2 % (pstate[:2] + (atime, mtime))
                         if mtime > pstate[1]:
                             if mtime > atime:
                                 finals[path] = val
@@ -281,11 +296,11 @@ class PMAudit(object):
                         else:
                             prereqs[path] = val
                     elif mtime > pstate[1]:
-                        val = FMT2 % (pstate + (atime, mtime))
+                        val = FMT2 % (pstate[:2] + (atime, mtime))
                         finals[path] = val
                         logging.info('pre-existing file modified: %s', path)
                     else:
-                        val = FMTU % pstate
+                        val = FMTU % pstate[:2]
                         unused[path] = val
                         continue
                 else:
@@ -335,6 +350,29 @@ def cfglog(bump):
         level=max(logging.DEBUG, logging.WARNING - (logging.DEBUG * bump)))
 
 
+def nfs_flush(priors, host=None):
+    """Do whatever it takes to force NFS flushing of metadata."""
+    apaths = sorted([os.path.abspath(p) for p in priors if priors[p][2]])
+    if host and apaths:
+        oldest = int(min((priors[k][1] for k in priors)))
+        cmd = ['ssh', host, '--', 'xargs', 'touch', '-a', '-t']
+        cmd.append(time.strftime('%Y%m%d%H%M', time.localtime(oldest - DELTA)))
+        if len(apaths) > 1:
+            logging.info('flushing %d files with "%s"',
+                         len(apaths), ' '.join(cmd))
+        cmd.insert(1, '-oLogLevel=error')
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, encoding='utf-8')
+        proc.stdin.write('\n'.join(apaths) + '\n')
+        proc.stdin.close()
+        if proc.wait():
+            sys.exit(2)
+    else:
+        for path in sorted(priors):
+            with open(path) as f:
+                fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
+                fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
+
+
 def main():
     """Entry point for standalone use."""
     parser = argparse.ArgumentParser(
@@ -350,14 +388,17 @@ def main():
         '-e', '--errexit', action='store_true',
         help="run CMD in -e mode")
     parser.add_argument(
+        '--flush-host',
+        help="a second host from which to force client flushes")
+    parser.add_argument(
+        '-k', '--keep-going', action='store_true',
+        help="continue even if atimes aren't updated")
+    parser.add_argument(
         '-F', '--final-targets', action='store_true',
         help="list final target files")
     parser.add_argument(
         '-I', '--intermediates', action='store_true',
         help="list intermediate target files")
-    parser.add_argument(
-        '-k', '--keep-going', action='store_true',
-        help="continue even if atimes aren't updated")
     parser.add_argument(
         '-P', '--prerequisites', action='store_true',
         help="list prerequisite files")
@@ -404,7 +445,7 @@ def main():
         for word in opts.watch:
             wdirs.extend(word.split(','))
         audit = PMAudit(wdirs, exclude=(os.path.basename(opts.save),))
-        audit.start(keep_going=opts.keep_going)
+        audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
         rc = subprocess.call(cmd)
         adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
         if opts.cmd:
@@ -462,6 +503,7 @@ def main():
         sys.stdout.write(path + '\n')
 
     sys.stdout.flush()
+
 
 if __name__ == '__main__':
     try:

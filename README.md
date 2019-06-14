@@ -217,7 +217,7 @@ make
 Alternatively (and after another make clean) we can build with the
 auditor inserted on a per-recipe basis by overriding the shell:
 
-% make --eval='.ONESHELL:' SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
+% make --eval=.ONESHELL: SHELL=pmash .SHELLFLAGS='-o $@.d -c' > make.log 2>&1
 
 This will run each recipe using "pmash -o [target].d -c 'recipe'".
 Here's one of the dependency files it generates:
