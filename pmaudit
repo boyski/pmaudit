@@ -172,11 +172,11 @@ class PMAudit(object):
 
     """Track files used (prereqs) and generated (targets)."""
 
-    def __init__(self, watchdirs, exclude=()):
+    def __init__(self, watchdirs, exclude=set()):
         self.watchdirs = watchdirs
         self.exclude = set(['.git', '.svn'])
         if exclude:
-            self.exclude |= set(exclude)
+            self.exclude |= exclude
         self.prereqs = collections.OrderedDict()
         self.intermediates = collections.OrderedDict()
         self.finals = collections.OrderedDict()
@@ -415,13 +415,15 @@ def main():
         '-W', '--watch', action='append', default=[os.curdir],
         metavar='DIR',
         help="audit activity within DIRs (default=%(default)s)")
+    parser.add_argument( # default='%s.json' % PROG
+        '-o', '--save', metavar='FILE',
+        help="save audit data in JSON format to FILE")
+    parser.add_argument(
+        '-d', '--depsfile', metavar='FILE',
+        help="save audit data in makefile format to FILE")
 
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
         if '--' in sys.argv:
-            parser.add_argument(
-                '-o', '--save', default='%s.json' % PROG,
-                metavar='FILE',
-                help="save audit data to FILE (default=%(default)s)")
             opts, cmd = parser.parse_known_args()
             cfglog(opts.verbosity)
             if '--' in cmd:
@@ -429,36 +431,43 @@ def main():
             assert not (opts.cmd or opts.errexit)
             sys.stderr.write('+ %s\n' % ' '.join(cmd))
         else:
-            parser.add_argument(
-                '-o', '--save', required=True,
-                metavar='FILE',
-                help="save audit data to FILE")
             opts = parser.parse_args()
-            cmd = [os.getenv('SHELL', '/bin/sh')]
             cfglog(opts.verbosity)
+            cmd = [os.getenv('SHELL', '/bin/sh')]
             if opts.errexit:
                 cmd.append('-e')
             if opts.verbosity:
                 cmd.append('-x')
             cmd += ['-c', opts.cmd]
+        if not opts.save and not opts.depsfile: # Implement default save.
+            opts.save = '%s.json' % PROG
         wdirs = []
         for word in opts.watch:
             wdirs.extend(word.split(','))
-        audit = PMAudit(wdirs, exclude=(os.path.basename(opts.save),))
+        exclude_set = set()
+        if opts.save:
+            exclude_set |= {opts.save}
+        if opts.depsfile:
+            exclude_set |= {opts.depsfile}
+        audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
         rc = subprocess.call(cmd)
         adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
-        if opts.cmd:
+        if opts.depsfile:
             prqs = adb[DB][PREREQS]
+            # TODO: Perhaps we should *always* create depsfile, even if empty.
             if prqs:
-                with open(opts.save, 'w') as f:
-                    f.write(os.path.splitext(opts.save)[0] + ': \\\n')
+                depsdir = os.path.dirname(opts.depsfile)
+                if depsdir and not os.path.exists(depsdir):
+                    os.makedirs(depsdir)
+                with open(opts.depsfile, 'w') as f:
+                    f.write(os.path.splitext(opts.depsfile)[0] + ': \\\n')
                     for i, prq in enumerate(prqs):
                         eol = ' \\\n' if i < len(prqs) - 1 else '\n'
                         f.write('  %s%s' % (prq, eol))
                     for prq in prqs:
                         f.write('\n%s:\n' % prq)
-        else:
+        if opts.save:
             savedir = os.path.dirname(opts.save)
             if savedir and not os.path.exists(savedir):
                 os.makedirs(savedir)
@@ -467,12 +476,8 @@ def main():
                 f.write('\n')
         sys.exit(2 if rc else 0)
 
-    db_parser = parser.add_mutually_exclusive_group()
-    db_parser.add_argument(
-        '-o', '--save', default='%s.json' % PROG,
-        metavar='FILE',
-        help="save audit data to FILE (default=%(default)s)")
-    db_parser.add_argument(
+    # Don't analyze, e.g., report from an existing audit log.
+    parser.add_argument(
         'dbfile', default='%s.json' % PROG, nargs='?',
         metavar='FILE',
         help="query audit data from FILE (default=%(default)s)")
