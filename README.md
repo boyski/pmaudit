@@ -189,7 +189,7 @@ its state is fresh.
 
 A complete black-box audit from the top:
 
-% pmaudit --save pmaudit.json -- make > /dev/null
+% pmaudit --json pmaudit.json -- make > /dev/null
 
 This leaves us with a little JSON database:
 
