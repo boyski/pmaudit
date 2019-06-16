@@ -392,10 +392,6 @@ main(int argc, char *argv[])
 
     if (depsfile) {
         fclose(fp);
-        // Don't keep empty deps files around.
-        if (!prq_count) {
-            insist(unlink(depsfile) != -1, depsfile);
-        }
     }
 
     return rc;
