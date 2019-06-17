@@ -168,22 +168,16 @@ def os_path_walk(top, func, arg):
             os_path_walk(name, func, arg)
 
 def die(message):
-    """Report failure message and exit program with failure"""
+    """Report failure message and exit program with failure."""
     print(message, file=sys.stderr)
-    sys.stderr.flush()
-    exit(1)
+    sys.exit(1)
 
-def mkdir_p_or_die(new_dir):
-    """Make a directory or die"""
-    if not new_dir or new_dir == '.':
+def mkdir_p(new_dir):
+    """Make a directory sequence if it doesn't exist already."""
+    if not new_dir:
         return # Presume empty/current directory exists.
-    try:
-        os.makedirs(new_dir, exist_ok=True) # Skip
-    except Exception as e:
-        # Don't use f'...' because older versions of Python3 don't have it.
-        die("Failed with " + e.__class__.__name__ + " when creating " + new_dir)
-    if not os.path.isdir(new_dir): # exist_ok doesn't ensure it's a dir; check!
-        die("Existing and not a directory: " + new_dir)
+    # This raises an exception if can't create (e.g., if it's a file):
+    os.makedirs(new_dir, exist_ok=True)
 
 class PMAudit(object):
 
@@ -390,7 +384,7 @@ def nfs_flush(priors, host=None):
                 fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
 
 def custom_results(custom_list):
-    """Convert custom_list, a list of key=value pairs, into a dictionary"""
+    """Convert custom_list, a list of key=value pairs, into a dictionary."""
     result = {}
     if custom_list:
         for entry in custom_list:
@@ -444,13 +438,16 @@ def main():
         metavar='DIR',
         help="audit activity within DIRs (default=%(default)s)")
     parser.add_argument( # default='%s.json' % PROG
-        '-j', '--json', metavar='FILE',
+        '-j', '--json',
+        metavar='FILE',
         help="save audit data in JSON format to FILE")
     parser.add_argument(
-        '-d', '--depsfile', metavar='FILE',
+        '-d', '--depsfile',
+        metavar='FILE',
         help="save audit data in makefile format to FILE")
     parser.add_argument(
-        '--custom', action='append', metavar='KEY_VALUE_PAIR',
+        '--custom', action='append',
+        metavar='KEY_VALUE_PAIR',
         help="Include custom key=value pair in JSON results")
 
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
@@ -470,7 +467,7 @@ def main():
             if opts.verbosity:
                 cmd.append('-x')
             cmd += ['-c', opts.cmd]
-        if not opts.json and not opts.depsfile: # Implement default save.
+        if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
         wdirs = []
         for word in opts.watch:
@@ -488,7 +485,7 @@ def main():
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
             # *Always* create depsfile, even if prqs is empty.
-            mkdir_p_or_die(os.path.dirname(opts.depsfile))
+            mkdir_p(os.path.dirname(opts.depsfile))
             with open(opts.depsfile, 'w') as f:
                 f.write(os.path.splitext(opts.depsfile)[0] + ': \\\n')
                 for i, prq in enumerate(prqs):
@@ -497,7 +494,7 @@ def main():
                 for prq in prqs:
                     f.write('\n%s:\n' % prq)
         if opts.json:
-            mkdir_p_or_die(os.path.dirname(opts.json))
+            mkdir_p(os.path.dirname(opts.json))
             with open(opts.json, 'w') as f:
                 json.dump(adb, f, indent=2)
                 f.write('\n')
