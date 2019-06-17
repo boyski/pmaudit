@@ -167,17 +167,20 @@ def os_path_walk(top, func, arg):
         if stat.S_ISDIR(st.st_mode):
             os_path_walk(name, func, arg)
 
+
 def die(message):
     """Report failure message and exit program with failure."""
     print(message, file=sys.stderr)
     sys.exit(1)
 
+
 def mkdir_p(new_dir):
     """Make a directory sequence if it doesn't exist already."""
     if not new_dir:
-        return # Presume empty/current directory exists.
+        return  # Presume empty/current directory exists.
     # This raises an exception if can't create (e.g., if it's a file):
     os.makedirs(new_dir, exist_ok=True)
+
 
 class PMAudit(object):
 
@@ -383,6 +386,7 @@ def nfs_flush(priors, host=None):
                 fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
                 fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
 
+
 def custom_results(custom_list):
     """Convert custom_list, a list of key=value pairs, into a dictionary."""
     result = {}
@@ -391,9 +395,10 @@ def custom_results(custom_list):
             if '=' in entry:
                 key, value = entry.split('=', maxsplit=1)
                 result[key] = value
-            else: # If no value is given, use true as the value.
+            else:  # If no value is given, use true as the value.
                 result[entry] = True
     return result
+
 
 def main():
     """Entry point for standalone use."""
@@ -437,8 +442,8 @@ def main():
         '-W', '--watch', action='append', default=[os.curdir],
         metavar='DIR',
         help="audit activity within DIRs (default=%(default)s)")
-    parser.add_argument( # default='%s.json' % PROG
-        '-j', '--json',
+    parser.add_argument(
+        '-j', '--json',  # default='%s.json' % PROG
         metavar='FILE',
         help="save audit data in JSON format to FILE")
     parser.add_argument(
