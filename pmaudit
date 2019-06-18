@@ -401,14 +401,14 @@ def my_json_dump(data, open_file, current=0, indent=2):
         indent_text = new_indent * ' '
         first = True
         for key in data:
-            if not first: # Add separator (comma) and new line
+            if not first:  # Add separator (comma) and new line
                 print(',', file=open_file)
             open_file.write(indent_text)
             open_file.write(json.dumps(key))
             open_file.write(': ')
             my_json_dump(data[key], open_file, new_indent, indent)
             first = False
-        print('', file=open_file) # End last line
+        print('', file=open_file)  # End last line
         open_file.write(current * ' ')
         open_file.write('}')
     # Lists don't include long dictionaries, so re-implementation not needed.
