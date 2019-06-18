@@ -121,6 +121,7 @@ FMTU = ['0', '0']
 HOSTNAME = 'HOSTNAME'
 BASE = 'BASE'
 CMD = 'CMD'
+FINAL_CMD = 'FINAL_CMD'
 START = 'START'
 PRIOR_COUNT = 'PRIOR_COUNT'
 AFTER_COUNT = 'AFTER_COUNT'
@@ -266,7 +267,7 @@ class PMAudit(object):
 
         self.reftime = time.time()
 
-    def finish(self, cmd=None):
+    def finish(self, cmd=None, final_cmd=None):
         """End the audit, return the result."""
 
         # Record the set of surviving files with their times,
@@ -344,6 +345,7 @@ class PMAudit(object):
         root[HOSTNAME] = socket.gethostname()
         root[BASE] = os.getcwd()
         root[CMD] = str(cmd)
+        root[FINAL_CMD] = final_cmd
         dt = datetime.datetime.utcfromtimestamp(self.reftime)
         refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         root[START] = [refstr, FMT1 % self.reftime]
@@ -525,7 +527,7 @@ def main():
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
         rc = subprocess.call(cmd)
-        adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
+        adb = audit.finish(cmd=(opts.cmd or ' '.join(cmd)), final_cmd=cmd)
         adb['CUSTOM'] = custom_results(opts.custom)
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
