@@ -114,11 +114,11 @@ import time
 
 PROG = os.path.basename(__file__)
 
-FMT = '%.07f,%.07f'
-FMT2 = ','.join([FMT, FMT])
-FMTN = ','.join(['-2,-1', FMT])
-FMTU = ','.join([FMT, '0,0'])
+FMT1 = '%.07f'  # Format for one time value
+FMTN = ['-2', '-1']
+FMTU = ['0', '0']
 
+HOSTNAME = 'HOSTNAME'
 BASE = 'BASE'
 CMD = 'CMD'
 START = 'START'
@@ -298,7 +298,8 @@ class PMAudit(object):
                 pstate = self.prior.get(path)
                 if pstate:
                     if atime > pstate[0]:
-                        val = FMT2 % (pstate[:2] + (atime, mtime))
+                        val = [FMT1 % pstate[0], FMT1 % pstate[1],
+                               FMT1 % atime, FMT1 % mtime]
                         if mtime > pstate[1]:
                             if mtime > atime:
                                 finals[path] = val
@@ -310,15 +311,16 @@ class PMAudit(object):
                         else:
                             prereqs[path] = val
                     elif mtime > pstate[1]:
-                        val = FMT2 % (pstate[:2] + (atime, mtime))
+                        val = [FMT1 % pstate[0], FMT1 % pstate[1],
+                               FMT1 % atime, FMT1 % mtime]
                         finals[path] = val
                         logging.info('pre-existing file modified: %s', path)
                     else:
-                        val = FMTU % pstate[:2]
+                        val = [FMT1 % pstate[0], FMT1 % pstate[1]] + FMTU
                         unused[path] = val
                         continue
                 else:
-                    val = FMTN % (atime, mtime)
+                    val = FMTN + [FMT1 % atime, FMT1 % mtime]
                     if mtime < atime:
                         intermediates[path] = val
                     else:
@@ -339,11 +341,12 @@ class PMAudit(object):
 
         # Build up and return a serializable database.
         root = collections.OrderedDict()
-        root[BASE] = '%s:%s' % (socket.gethostname(), os.getcwd())
+        root[HOSTNAME] = socket.gethostname()
+        root[BASE] = os.getcwd()
         root[CMD] = str(cmd)
         dt = datetime.datetime.utcfromtimestamp(self.reftime)
         refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        root[START] = '%s (%f)' % (refstr, self.reftime)
+        root[START] = [refstr, FMT1 % self.reftime]
         root[PRIOR_COUNT] = str(len(self.prior))
         after_count = len(self.prereqs) + len(self.intermediates) + \
             len(self.finals) + len(self.unused)
@@ -385,6 +388,43 @@ def nfs_flush(priors, host=None):
             with open(path) as f:
                 fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
                 fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
+
+
+def my_json_dump(data, open_file, current=0, indent=2):
+    """Perform json.dump but display each list as a single line."""
+    # Unfortunately json.dump() provides very little formatting control,
+    # so we'll just re-implement what we need.
+    # We assume starting indentation (if needed) has already occurred.
+    if isinstance(data, dict) and data:
+        print('{', file=open_file)
+        new_indent = current + indent
+        indent_text = new_indent * ' '
+        first = True
+        for key in data:
+            if not first: # Add separator (comma) and new line
+                print(',', file=open_file)
+            open_file.write(indent_text)
+            open_file.write(json.dumps(key))
+            open_file.write(': ')
+            my_json_dump(data[key], open_file, new_indent, indent)
+            first = False
+        print('', file=open_file) # End last line
+        open_file.write(current * ' ')
+        open_file.write('}')
+    # Lists don't include long dictionaries, so re-implementation not needed.
+    # Instead, everything *but* hashes are forced onto a single line.
+    else:
+        json.dump(data, open_file)
+
+
+def generate_json(data, filename):
+    """Generate and store JSON data with control over formatting."""
+    mkdir_p(os.path.dirname(filename))
+    with open(filename, 'w') as f:
+        # We don't use "json.dump(data, f, indent=2)" because that produces
+        # many multi-line lists.
+        my_json_dump(data, f)
+        f.write('\n')
 
 
 def custom_results(custom_list):
@@ -499,10 +539,7 @@ def main():
                 for prq in prqs:
                     f.write('\n%s:\n' % prq)
         if opts.json:
-            mkdir_p(os.path.dirname(opts.json))
-            with open(opts.json, 'w') as f:
-                json.dump(adb, f, indent=2)
-                f.write('\n')
+            generate_json(adb, opts.json)
         sys.exit(2 if rc else 0)
 
     # Don't analyze, e.g., report from an existing audit log.
