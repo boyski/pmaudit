@@ -171,7 +171,7 @@ def os_path_walk(top, func, arg):
 
 def die(message):
     """Report failure message and exit program with failure."""
-    print(message, file=sys.stderr)
+    sys.stderr.write(message + '\n')
     sys.exit(1)
 
 
@@ -398,19 +398,19 @@ def my_json_dump(data, open_file, current=0, indent=2):
     # so we'll just re-implement what we need.
     # We assume starting indentation (if needed) has already occurred.
     if isinstance(data, dict) and data:
-        print('{', file=open_file)
+        open_file.write('{\n')
         new_indent = current + indent
         indent_text = new_indent * ' '
         first = True
         for key in data:
-            if not first: # Add separator (comma) and new line
-                print(',', file=open_file)
+            if not first:  # Add separator (comma) and new line
+                open_file.write(',\n')
             open_file.write(indent_text)
             open_file.write(json.dumps(key))
             open_file.write(': ')
             my_json_dump(data[key], open_file, new_indent, indent)
             first = False
-        print('', file=open_file) # End last line
+        open_file.write('\n')  # End last line
         open_file.write(current * ' ')
         open_file.write('}')
     # Lists don't include long dictionaries, so re-implementation not needed.
