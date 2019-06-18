@@ -115,8 +115,8 @@ import time
 PROG = os.path.basename(__file__)
 
 FMT1 = '%.07f'  # Format for one time value
-FMTN = ["-2", "-1"]
-FMTU = ["0", "0"]
+FMTN = ['-2', '-1']
+FMTU = ['0', '0']
 
 HOSTNAME = 'HOSTNAME'
 BASE = 'BASE'
@@ -341,13 +341,12 @@ class PMAudit(object):
 
         # Build up and return a serializable database.
         root = collections.OrderedDict()
-        root[HOSTNAME] = '%s' % socket.gethostname()
-        root[BASE] = '%s' % os.getcwd()
+        root[HOSTNAME] = socket.gethostname()
+        root[BASE] = os.getcwd()
         root[CMD] = str(cmd)
         dt = datetime.datetime.utcfromtimestamp(self.reftime)
         refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        root[START] = '%s (%f)' % (refstr, self.reftime)
-        root[START] = ['%s' % refstr, FMT1 % self.reftime]
+        root[START] = [refstr, FMT1 % self.reftime]
         root[PRIOR_COUNT] = str(len(self.prior))
         after_count = len(self.prereqs) + len(self.intermediates) + \
             len(self.finals) + len(self.unused)
