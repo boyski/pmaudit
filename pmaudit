@@ -378,8 +378,9 @@ def nfs_flush(priors, host=None):
             logging.info('flushing %d files with "%s"',
                          len(apaths), ' '.join(cmd))
         cmd.insert(1, '-oLogLevel=error')
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, encoding='utf-8')
-        proc.stdin.write('\n'.join(apaths) + '\n')
+        touches = '\n'.join(apaths) + '\n'
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.stdin.write(touches.encode('utf-8'))
         proc.stdin.close()
         if proc.wait():
             sys.exit(2)
