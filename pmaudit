@@ -491,20 +491,18 @@ def main():
         metavar='FILE',
         help="save audit data in makefile format to FILE")
     parser.add_argument(
-        '--shell',
-        metavar='SHELL_COMMAND',
-        help="Name of shell to run (default=SHELL else /bin/sh)")
+        '--shell', default='/bin/sh',
+        help="name of shell to run (default=%(default)s)")
     parser.add_argument(
-        '--shellflags',
-        metavar='SHELL_FLAGS',
-        help="Space-separated set of flags to pass to shell (default=-c)")
+        '--shellflags', default='-c',
+        help="space-separated flags to pass to shell (default=%(default)s)")
     parser.add_argument(
         '--multiline', action='store_true',
-        help="Separately run each line in the command")
+        help="separately run each line in the command")
     parser.add_argument(
         '--custom', action='append',
         metavar='KEY_VALUE_PAIR',
-        help="Include custom key=value pair in JSON results")
+        help="include custom key=value pair in JSON results")
 
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
         if '--' in sys.argv:
@@ -517,18 +515,12 @@ def main():
         else:
             opts = parser.parse_args()
             cfglog(opts.verbosity)
-            if opts.shell:
-                cmd = [opts.shell]
-            else:
-                cmd = [os.getenv('SHELL', '/bin/sh')]
             if opts.errexit:
                 cmd.append('-e')
             if opts.verbosity:
                 cmd.append('-x')
             if opts.shellflags:
                 cmd += opts.shellflags.split()
-            else:
-                cmd.append('-c')
             if opts.multiline:
                 result = [cmd + [line] for line in opts.cmd.splitlines()]
                 cmd = result
