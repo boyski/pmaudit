@@ -491,6 +491,17 @@ def main():
         metavar='FILE',
         help="save audit data in makefile format to FILE")
     parser.add_argument(
+        '--shell',
+        metavar='SHELL_COMMAND',
+        help="Name of shell to run (default=SHELL else /bin/sh)")
+    parser.add_argument(
+        '--shellflags',
+        metavar='SHELL_FLAGS',
+        help="Space-separated set of flags to pass to shell (default=-c)")
+    parser.add_argument(
+        '--multiline', action='store_true',
+        help="Separately run each line in the command")
+    parser.add_argument(
         '--custom', action='append',
         metavar='KEY_VALUE_PAIR',
         help="Include custom key=value pair in JSON results")
@@ -506,12 +517,23 @@ def main():
         else:
             opts = parser.parse_args()
             cfglog(opts.verbosity)
-            cmd = [os.getenv('SHELL', '/bin/sh')]
+            if opts.shell:
+                cmd = [opts.shell]
+            else:
+                cmd = [os.getenv('SHELL', '/bin/sh')]
             if opts.errexit:
                 cmd.append('-e')
             if opts.verbosity:
                 cmd.append('-x')
-            cmd += ['-c', opts.cmd]
+            if opts.shellflags:
+                cmd += opts.shellflags.split()
+            else:
+                cmd.append('-c')
+            if opts.multiline:
+                result = [cmd + [line] for line in opts.cmd.splitlines()]
+                cmd = result
+            else:
+                cmd.append(opts.cmd)
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
         wdirs = []
@@ -524,7 +546,15 @@ def main():
             exclude_set |= {opts.depsfile}
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
-        rc = subprocess.call(cmd)
+        if cmd and cmd[0] and isinstance(cmd[0], list):
+            for cmd_line in cmd: # Execute each line in sequence.
+                rc = subprocess.call(cmd_line)
+                # Stop if we get an error.  Note that "make" does this *even*
+                # when -k/--keep-going mode is enabled.
+                if rc != 0:
+                    break
+        else:
+            rc = subprocess.call(cmd)
         adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
         adb['CUSTOM'] = custom_results(opts.custom)
         if opts.depsfile:
