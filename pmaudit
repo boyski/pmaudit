@@ -532,8 +532,7 @@ def main():
             if opts.shellflags:
                 cmd += opts.shellflags.split()
             if opts.multiline:
-                result = [cmd + [line] for line in opts.cmd.splitlines()]
-                cmds = result
+                cmds = [cmd + [line] for line in opts.cmd.splitlines()]
             else:
                 cmds = [cmd + [opts.cmd]]
             cmd_text = opts.cmd
@@ -544,15 +543,16 @@ def main():
             wdirs.extend(word.split(','))
         exclude_set = set()
         if opts.json:
-            exclude_set |= {opts.json}
+            exclude_set.add(opts.json)
         if opts.depsfile:
-            exclude_set |= {opts.depsfile}
+            exclude_set.add(opts.depsfile)
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
-        for cmd_line in cmds:  # Execute each line in sequence.
-            rc = subprocess.call(cmd_line)
+        for cmd in cmds:  # Execute each line in sequence.
+            rc = subprocess.call(cmd)
             # Stop if we get an error.  Note that "make" does this *even*
-            # when -k/--keep-going mode is enabled.
+            # with -k/--keep-going mode because -k is per recipe whereas
+            # this is per line of recipe.
             if rc != 0:
                 break
         adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
