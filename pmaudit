@@ -499,9 +499,18 @@ def main():
         metavar='FILE',
         help="save audit data in makefile format to FILE")
     parser.add_argument(
+        '--shell', default='/bin/sh',
+        help="name of shell to run (default=%(default)s)")
+    parser.add_argument(
+        '--shellflags', default='-c',
+        help="space-separated flags to pass to shell (default=%(default)s)")
+    parser.add_argument(
+        '--multiline', action='store_true',
+        help="separately run each line in the command")
+    parser.add_argument(
         '--custom', action='append',
         metavar='KEY_VALUE_PAIR',
-        help="Include custom key=value pair in JSON results")
+        help="include custom key=value pair in JSON results")
 
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
         if '--' in sys.argv:
@@ -510,16 +519,24 @@ def main():
             if '--' in cmd:
                 cmd.remove('--')
             assert not (opts.cmd or opts.errexit)
-            sys.stderr.write('+ %s\n' % ' '.join(cmd))
+            cmds = [cmd]
+            cmd_text = ' '.join(cmd)
         else:
             opts = parser.parse_args()
             cfglog(opts.verbosity)
-            cmd = [os.getenv('SHELL', '/bin/sh')]
+            cmd = [opts.shell]
             if opts.errexit:
                 cmd.append('-e')
             if opts.verbosity:
                 cmd.append('-x')
-            cmd += ['-c', opts.cmd]
+            if opts.shellflags:
+                cmd += opts.shellflags.split()
+            if opts.multiline:
+                result = [cmd + [line] for line in opts.cmd.splitlines()]
+                cmds = result
+            else:
+                cmds = [cmd + [opts.cmd]]
+            cmd_text = opts.cmd
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
         wdirs = []
@@ -532,8 +549,13 @@ def main():
             exclude_set |= {opts.depsfile}
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
-        rc = subprocess.call(cmd)
-        adb = audit.finish(cmd=(opts.cmd or ' '.join(cmd)), final_cmd=cmd)
+        for cmd_line in cmds:  # Execute each line in sequence.
+            rc = subprocess.call(cmd_line)
+            # Stop if we get an error.  Note that "make" does this *even*
+            # when -k/--keep-going mode is enabled.
+            if rc != 0:
+                break
+        adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
         adb['CUSTOM'] = custom_results(opts.custom)
         if opts.depsfile:
             prqs = adb[DB][PREREQS]

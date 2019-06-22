@@ -260,4 +260,21 @@ the recipe for each object file looks like this (simplified):
 Without .ONESHELL the mv command would run last and in its own shell
 so jobs.o.d would end up recording only the actions of mv, not gcc.
 
+## Per-Target Detailed Auditing with Pmaudit
+
+Let's say that you want to record detailed information about
+what was read and written for each make target.
+
+Here's one way to do that:
+
+% make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='--multiline --json $@.json -c' > make.log 2>&1
+
+Here we are using pmaudit, which currently provides more options
+than pmash.
+We use its "--multiline" option to more accurately reflect how make
+normally runs commands (normally make runs a line at a time, and stops
+a command once any of them fail).
+We also use its "--json" option to record data to a JSON file - this
+provides much more information than the "-d" option.
+
 [*] With apologies for the implied classism and sexism :-)
