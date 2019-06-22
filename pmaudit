@@ -8,35 +8,39 @@ named by the --json option in .json format. When run without "--" it reads the
 audit file and dumps results (things like prereqs, targets, etc) from it.
 The audit file defaults to "%(prog)s.json".
 
-Audited files are divided into 4 categories: prerequisites, intermediate
-targets, final targets, and unused:
+Audited files are divided into 5 categories: prerequisites, intermediate
+targets, modified sources, final targets, and unused:
 
-  - A prerequisite is a file which was opened only for read; commonly
+  1. A prerequisite is a file which was opened only for read; commonly
   this will be a source file originally checked out from SCM.
 
-  - An intermediate target is one that was opened for both write and read
+  2. An intermediate target is one that was opened for both write and read
   (in that order). The most common example would be a .o file created
   by the compiler and later read by the linker.
 
-  - A final target is a file which was opened only for write.
+  3. A file opened for both read and write in the other order (read before
+  write) indicates a logic flaw in the build since it amounts to modifying
+  a source file. This case generates a warning.
+
+  4. A final target is a file which was opened only for write.
   Typically it's one of the final, deliverable build artifacts, the
   thing you set out to build. An example would be an executable file
   created by the linker.
 
-  - An unused file, naturally, is one not opened at all during the build.
+  5. An unused file, naturally, is one not opened at all during the build.
 
 HOW IT WORKS:
 
-This is the simplest form of file access auditing and could almost be done
-by hand without scripting. It relies only on standard Unix file access
-(atime) and modification (mtime) semantics. Before running the audited
-command, the timestamps of all existing files in the audited directory
-tree are recorded.  Then, as soon as the command finishes, all files in
-the directory are rechecked.  If a file existed before the audit and
-neither atime nor mtime has moved after, it was clearly unused.  If only
-the atime has advanced it's a prereq. If it came into existence during the
-audit it's a target, and if atime > mtime it's an intermediate target.
-Etc.
+This is the simplest form of file access auditing and could almost be
+done by hand without scripting. It relies only on standard Unix file
+access (atime) and modification (mtime) semantics. Before running
+the audited command, the timestamps of all existing files in the
+audited directory tree are normalized and recorded.  Then, as soon as
+the command finishes, the same set of files is rechecked.  If a file
+existed before the audit and neither atime nor mtime has moved after,
+it was clearly unused.  If only the atime has advanced it's a prereq. If
+it came into existence during the audit it's a target, and if atime >
+mtime it's an intermediate target.  Etc.
 
 A nice benefit of this simplicity is that there's practically no
 performance cost. Most build-auditing techniques rely on a special
@@ -50,11 +54,12 @@ performance reasons. Thus it must be used either in local disk or an NFS
 mount without the "noatime" option. An error is given if atimes don't seem
 to be updated in the audited directory's filesystem.
 
-Also, due to the introduction of "relatime" behavior on Linux it's become
-necessary to artificially set each pre-existing file's atime prior to its
-mtime during prior-state collection.  Read up on relatime for background.
-Looking forward, the existence of relatime may make the use of noatime in
-NFS less common.
+Also, due to the introduction of "relatime" behavior on Linux it's
+become necessary to artificially set each pre-existing file's atime
+prior to its mtime during prior-state collection.  Read up on relatime
+for background.  The invention of relatime has made the use of noatime
+in NFS less common, which is a big help, and relatime is becoming the
+default NFS mount option.
 
 If the underlying filesystem doesn't support sufficient timestamp
 precision, results may be iffy. Clearly, when atimes and mtimes are
@@ -121,6 +126,7 @@ FMTU = ['0', '0']
 HOSTNAME = 'HOSTNAME'
 BASE = 'BASE'
 CMD = 'CMD'
+FINAL_CMD = 'FINAL_CMD'
 START = 'START'
 PRIOR_COUNT = 'PRIOR_COUNT'
 AFTER_COUNT = 'AFTER_COUNT'
@@ -266,7 +272,7 @@ class PMAudit(object):
 
         self.reftime = time.time()
 
-    def finish(self, cmd=None):
+    def finish(self, cmd=None, final_cmd=None):
         """End the audit, return the result."""
 
         # Record the set of surviving files with their times,
@@ -344,6 +350,7 @@ class PMAudit(object):
         root[HOSTNAME] = socket.gethostname()
         root[BASE] = os.getcwd()
         root[CMD] = str(cmd)
+        root[FINAL_CMD] = final_cmd
         dt = datetime.datetime.utcfromtimestamp(self.reftime)
         refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         root[START] = [refstr, FMT1 % self.reftime]
@@ -378,8 +385,9 @@ def nfs_flush(priors, host=None):
             logging.info('flushing %d files with "%s"',
                          len(apaths), ' '.join(cmd))
         cmd.insert(1, '-oLogLevel=error')
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, encoding='utf-8')
-        proc.stdin.write('\n'.join(apaths) + '\n')
+        touches = '\n'.join(apaths) + '\n'
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.stdin.write(touches.encode('utf-8'))
         proc.stdin.close()
         if proc.wait():
             sys.exit(2)
@@ -511,7 +519,8 @@ def main():
             if '--' in cmd:
                 cmd.remove('--')
             assert not (opts.cmd or opts.errexit)
-            cmd = [cmd]
+            cmds = [cmd]
+            cmd_text = ' '.join(cmd)
         else:
             opts = parser.parse_args()
             cfglog(opts.verbosity)
@@ -524,9 +533,10 @@ def main():
                 cmd += opts.shellflags.split()
             if opts.multiline:
                 result = [cmd + [line] for line in opts.cmd.splitlines()]
-                cmd = result
+                cmds = result
             else:
-                cmd = [cmd + [opts.cmd]]
+                cmds = [cmd + [opts.cmd]]
+            cmd_text = opts.cmd
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
         wdirs = []
@@ -539,13 +549,13 @@ def main():
             exclude_set |= {opts.depsfile}
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
-        for cmd_line in cmd: # Execute each line in sequence.
+        for cmd_line in cmds:  # Execute each line in sequence.
             rc = subprocess.call(cmd_line)
             # Stop if we get an error.  Note that "make" does this *even*
             # when -k/--keep-going mode is enabled.
             if rc != 0:
                 break
-        adb = audit.finish(cmd=str(opts.cmd))
+        adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
         adb['CUSTOM'] = custom_results(opts.custom)
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
