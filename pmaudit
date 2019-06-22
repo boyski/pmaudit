@@ -511,10 +511,11 @@ def main():
             if '--' in cmd:
                 cmd.remove('--')
             assert not (opts.cmd or opts.errexit)
-            sys.stderr.write('+ %s\n' % ' '.join(cmd))
+            cmd = [cmd]
         else:
             opts = parser.parse_args()
             cfglog(opts.verbosity)
+            cmd = [opts.shell]
             if opts.errexit:
                 cmd.append('-e')
             if opts.verbosity:
@@ -525,7 +526,7 @@ def main():
                 result = [cmd + [line] for line in opts.cmd.splitlines()]
                 cmd = result
             else:
-                cmd.append(opts.cmd)
+                cmd = [cmd + [opts.cmd]]
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
         wdirs = []
@@ -538,16 +539,13 @@ def main():
             exclude_set |= {opts.depsfile}
         audit = PMAudit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
-        if cmd and cmd[0] and isinstance(cmd[0], list):
-            for cmd_line in cmd: # Execute each line in sequence.
-                rc = subprocess.call(cmd_line)
-                # Stop if we get an error.  Note that "make" does this *even*
-                # when -k/--keep-going mode is enabled.
-                if rc != 0:
-                    break
-        else:
-            rc = subprocess.call(cmd)
-        adb = audit.finish(cmd=opts.cmd or ' '.join(cmd))
+        for cmd_line in cmd: # Execute each line in sequence.
+            rc = subprocess.call(cmd_line)
+            # Stop if we get an error.  Note that "make" does this *even*
+            # when -k/--keep-going mode is enabled.
+            if rc != 0:
+                break
+        adb = audit.finish(cmd=str(opts.cmd))
         adb['CUSTOM'] = custom_results(opts.custom)
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
