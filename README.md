@@ -38,14 +38,15 @@ and unused. This database is useful for many things but it does not
 have data with sufficient granularity to tell you which prereqs were
 required by which targets.
 
-It can also be used as a shell wrapper. In this mode it's equivalent to
-pmash, generating per-target dependency data in make format, but slower.
+The pmaudit script can also be used as a shell wrapper to generate
+per-target dependency data in make format. In this mode it's similar
+to pmash but slower.
 
 ### pmash
 
 A C program which operates as a wrapper over the shell. Due to being
 written in C it's much faster than pmaudit but more limited.  It derives
-only per-target prerequisite data.
+only per-target prerequisite data and writes it only in make format.
 
 ### pmamake
 
@@ -75,10 +76,10 @@ disk space reasons. Auditing can help you find that subset.
 Imagine you have a proprietary code base and contracts with various
 customers to provide source code for what you sell them. Not every
 customer gets every product: customer A has a contractual right to
-source for products X and Y while customer B gets source for Z. If the
-build of a product produces the list of files involved in making it
-as a side effect, that list can be used with tar or zip to make up a
-minimal but guaranteed-complete source package.
+source for products X and Y while customer B gets Y and Z. If the build
+of a product derives the set of files involved in making it as a side
+effect, that list can be used with tar or zip to make up a minimal but
+guaranteed-complete source package.
 
 ### Dependency Analysis
 
@@ -91,8 +92,8 @@ language-agnostic.
 
 ## What Could Go Wrong?
 
-Are there flaws in this system? Because of its radical simplicity
-and lack of ambition there isn't much room for bugs but plenty of
+Are there flaws in this system? Because of its radical simplicity and
+lack of ambition there isn't much room for bugs but there are some
 limitations. In general, auditing the entire build from the top as a
 black box is fairly robust as long as your filesystem is configured
 to update atimes and you have the required permissions. Auditing on a
@@ -147,21 +148,24 @@ source tree using the GNU make -C option or equivalent e.g.:
     $ cd sub/dir && pmaudit ... -- make ...       # BAD
     $ pmaudit ... -- make -C sub/dir ...          # GOOD
 
+since the default watch location is the current working directory.
+
 ### Atimes Not Updated Due to Mount Settings
 
 This is a big one but the tools run a test to detect it. System admins
-often turn off atime updating on NFS as a performance enhancer. This is
+may turn off atime updating on NFS as a performance enhancer. This is
 really a system admin issue, not something the script can deal with, so
 it just dies when atimes aren't behaving. Consider asking system (NFS)
 administrators to use the relatively new "relatime" feature rather than
-turning off atime updates altogether.
+turning off atime updates altogether. Fortunately relatime is a default
+mount option in modern Linux.
 
 ### Weak Granularity of File Timestamps
 
 Another common issue. Some filesystems still record only seconds
 or milliseconds and the resulting roundoff errors can lead to bogus
-results. This technique works best on high-resolution filesystems such
-as Linux ext4 which records nanoseconds.
+results. The pmaudit technique works best on high-resolution filesystems
+such as Linux ext4 which records nanoseconds.
 
 ### Difference From Traditional Dependency Generation
 
@@ -251,7 +255,7 @@ prereq data to foo.d when building foo.
 The use of .ONESHELL is needed to cause build activity for each target
 to take place in a single shell process. Otherwise, since each recipe
 line is a different shell and they share the same value of $@ the
-output file would be overwritten. Here GNU make is a good example;
+output file would be overwritten. Again GNU make is a good example;
 the recipe for each object file looks like this (simplified):
 
     gcc -MT job.o -MD -MP -MF .deps/job.Tpo -c -o job.o job.c
@@ -262,19 +266,15 @@ so jobs.o.d would end up recording only the actions of mv, not gcc.
 
 ## Per-Target Detailed Auditing with Pmaudit
 
-Let's say that you want to record detailed information about
-what was read and written for each make target.
+Let's say that you want to record detailed information about what was
+read and written for each make target. Here's one way to do that:
 
-Here's one way to do that:
+% make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='--multiline --json $@.json -c'
 
-% make --eval=.ONESHELL: SHELL=pmaudit .SHELLFLAGS='--multiline --json $@.json -c' > make.log 2>&1
-
-Here we are using pmaudit, which currently provides more options
-than pmash.
-We use its "--multiline" option to more accurately reflect how make
-normally runs commands (normally make runs a line at a time, and stops
-a command once any of them fail).
-We also use its "--json" option to record data to a JSON file - this
-provides much more information than the "-d" option.
+Here we are using pmaudit, which currently provides more options than
+pmash, as the shell wrapper.  We use its --multiline option to more
+accurately reflect how make normally runs commands (normally make runs a
+line at a time and ends the recipe if any of them fail).  We also use
+the --json option which records much more information than --depsfile.
 
 [*] With apologies for the implied classism and sexism :-)
