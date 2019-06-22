@@ -454,11 +454,16 @@ def main():
         epilog=__doc__.strip(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        '-A', '--all-involved', action='store_true',
-        help="list all involved files")
-    parser.add_argument(
         '-c', '--cmd',
         help="run and audit the specified command line")
+    parser.add_argument(
+        '--custom', action='append',
+        metavar='KEY_VALUE_PAIR',
+        help="include custom key=value pair in JSON results")
+    parser.add_argument(
+        '-d', '--depsfile',
+        metavar='FILE',
+        help="save prerequisite data to FILE in makefile format")
     parser.add_argument(
         '-e', '--errexit', action='store_true',
         help="run CMD in -e mode")
@@ -466,8 +471,18 @@ def main():
         '--flush-host',
         help="a second host from which to force client flushes")
     parser.add_argument(
+        '-j', '--json',  # default='%s.json' % PROG
+        metavar='FILE',
+        help="save audit data in JSON format to FILE")
+    parser.add_argument(
         '-k', '--keep-going', action='store_true',
         help="continue even if atimes aren't updated")
+    parser.add_argument(
+        '--multiline', action='store_true',
+        help="separately run each line in the command")
+    parser.add_argument(
+        '-A', '--all-involved', action='store_true',
+        help="list all involved files")
     parser.add_argument(
         '-F', '--final-targets', action='store_true',
         help="list final target files")
@@ -491,26 +506,11 @@ def main():
         metavar='DIR',
         help="audit activity within DIRs (default=%(default)s)")
     parser.add_argument(
-        '-j', '--json',  # default='%s.json' % PROG
-        metavar='FILE',
-        help="save audit data in JSON format to FILE")
-    parser.add_argument(
-        '-d', '--depsfile',
-        metavar='FILE',
-        help="save audit data in makefile format to FILE")
-    parser.add_argument(
         '--shell', default='/bin/sh',
         help="name of shell to run (default=%(default)s)")
     parser.add_argument(
         '--shellflags', default='-c',
         help="space-separated flags to pass to shell (default=%(default)s)")
-    parser.add_argument(
-        '--multiline', action='store_true',
-        help="separately run each line in the command")
-    parser.add_argument(
-        '--custom', action='append',
-        metavar='KEY_VALUE_PAIR',
-        help="include custom key=value pair in JSON results")
 
     if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
         if '--' in sys.argv:
