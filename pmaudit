@@ -236,6 +236,7 @@ class PMAudit(object):
             if needflush:
                 nfs_flush({ref_fname: {'atime': nstats.st_atime,
                                        'mtime': nstats.st_mtime,
+                                       'size': nstats.st_size,
                                        'needflush': True}}, host=flush_host)
                 with open(ref_fname) as f:
                     f.read()
@@ -267,6 +268,7 @@ class PMAudit(object):
                         atime = mtime - DELTA
                         os.utime(path, (atime, mtime))
                     self.prior[path] = {'atime': atime, 'mtime': mtime,
+                                        'size': stats.st_size,
                                         'needflush': needflush}
 
         nfs_flush(self.prior, host=flush_host)
@@ -306,7 +308,8 @@ class PMAudit(object):
                 if pstate:
                     if atime > pstate['atime']:
                         val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
-                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime]}
+                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime],
+                               'size': [pstate['size'], stats.st_size]}
                         if mtime > pstate['mtime']:
                             if mtime > atime:
                                 finals[path] = val
@@ -319,17 +322,20 @@ class PMAudit(object):
                             prereqs[path] = val
                     elif mtime > pstate['mtime']:
                         val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
-                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime]}
+                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime],
+                               'size': [pstate['size'], stats.st_size]}
                         finals[path] = val
                         logging.info('pre-existing file modified: %s', path)
                     else:
                         val = {'atime': [FMT1 % pstate['atime'], '0'],
-                               'mtime': [FMT1 % pstate['mtime'], '0']}
+                               'mtime': [FMT1 % pstate['mtime'], '0'],
+                               'size': [pstate['size'], pstate['size']]}
                         unused[path] = val
                         continue
                 else:
                     val = {'atime': ['-2', FMT1 % atime],
-                           'mtime': ['-1', FMT1 % mtime]}
+                           'mtime': ['-1', FMT1 % mtime],
+                           'size': [None, stats.st_size]}
                     if mtime < atime:
                         intermediates[path] = val
                     else:
