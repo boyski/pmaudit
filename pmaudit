@@ -120,8 +120,6 @@ import time
 PROG = os.path.basename(__file__)
 
 FMT1 = '%.07f'  # Format for one time value
-FMTN = ['-2', '-1']
-FMTU = ['0', '0']
 
 HOSTNAME = 'hostname'
 BASE = 'base'
@@ -307,8 +305,8 @@ class PMAudit(object):
                 pstate = self.prior.get(path)
                 if pstate:
                     if atime > pstate['atime']:
-                        val = [FMT1 % pstate['atime'], FMT1 % pstate['mtime'],
-                               FMT1 % atime, FMT1 % mtime]
+                        val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
+                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime]}
                         if mtime > pstate['mtime']:
                             if mtime > atime:
                                 finals[path] = val
@@ -320,17 +318,18 @@ class PMAudit(object):
                         else:
                             prereqs[path] = val
                     elif mtime > pstate['mtime']:
-                        val = [FMT1 % pstate['atime'], FMT1 % pstate['mtime'],
-                               FMT1 % atime, FMT1 % mtime]
+                        val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
+                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime]}
                         finals[path] = val
                         logging.info('pre-existing file modified: %s', path)
                     else:
-                        val = [FMT1 % pstate['atime'],
-                               FMT1 % pstate['mtime']] + FMTU
+                        val = {'atime': [FMT1 % pstate['atime'], '0'],
+                               'mtime': [FMT1 % pstate['mtime'], '0']}
                         unused[path] = val
                         continue
                 else:
-                    val = FMTN + [FMT1 % atime, FMT1 % mtime]
+                    val = {'atime': ['-2', FMT1 % atime],
+                           'mtime': ['-1', FMT1 % mtime]}
                     if mtime < atime:
                         intermediates[path] = val
                     else:
@@ -407,7 +406,7 @@ def my_json_dump(data, open_file, current=0, indent=2):
     # Unfortunately json.dump() provides very little formatting control,
     # so we'll just re-implement what we need.
     # We assume starting indentation (if needed) has already occurred.
-    if isinstance(data, dict) and data:
+    if isinstance(data, dict) and data and 'atime' not in data:
         open_file.write('{\n')
         new_indent = current + indent
         indent_text = new_indent * ' '
