@@ -385,7 +385,8 @@ def cfglog(bump):
 
 def nfs_flush(priors, host=None):
     """Do whatever it takes to force NFS flushing of metadata."""
-    apaths = sorted([os.path.abspath(p) for p in priors if priors[p]['needflush']])
+    apaths = sorted([os.path.abspath(p)
+                     for p in priors if priors[p]['needflush']])
     if host and apaths:
         oldest = int(min((priors[k]['mtime'] for k in priors)))
         cmd = ['ssh', host, '--', 'xargs', 'touch', '-a', '-t']
