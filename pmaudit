@@ -236,8 +236,9 @@ class PMAudit(object):
             nstats = os.stat(ref_fname)
             needflush = nstats.st_atime < nstats.st_mtime
             if needflush:
-                nfs_flush({ref_fname: (nstats.st_atime, nstats.st_mtime,
-                                       True)}, host=flush_host)
+                nfs_flush({ref_fname: {'atime': nstats.st_atime,
+                                       'mtime': nstats.st_mtime,
+                                       'needflush': True}}, host=flush_host)
                 with open(ref_fname) as f:
                     f.read()
                 nstats = os.stat(ref_fname)
@@ -267,7 +268,8 @@ class PMAudit(object):
                     if atime >= mtime:
                         atime = mtime - DELTA
                         os.utime(path, (atime, mtime))
-                    self.prior[path] = (atime, mtime, needflush)
+                    self.prior[path] = {'atime': atime, 'mtime': mtime,
+                                        'needflush': needflush}
 
         nfs_flush(self.prior, host=flush_host)
 
@@ -304,10 +306,10 @@ class PMAudit(object):
                 atime, mtime = stats.st_atime, stats.st_mtime
                 pstate = self.prior.get(path)
                 if pstate:
-                    if atime > pstate[0]:
-                        val = [FMT1 % pstate[0], FMT1 % pstate[1],
+                    if atime > pstate['atime']:
+                        val = [FMT1 % pstate['atime'], FMT1 % pstate['mtime'],
                                FMT1 % atime, FMT1 % mtime]
-                        if mtime > pstate[1]:
+                        if mtime > pstate['mtime']:
                             if mtime > atime:
                                 finals[path] = val
                                 msg = 'pre-existing file is final'
@@ -317,13 +319,14 @@ class PMAudit(object):
                             logging.info('%s: %s', msg, path)
                         else:
                             prereqs[path] = val
-                    elif mtime > pstate[1]:
-                        val = [FMT1 % pstate[0], FMT1 % pstate[1],
+                    elif mtime > pstate['mtime']:
+                        val = [FMT1 % pstate['atime'], FMT1 % pstate['mtime'],
                                FMT1 % atime, FMT1 % mtime]
                         finals[path] = val
                         logging.info('pre-existing file modified: %s', path)
                     else:
-                        val = [FMT1 % pstate[0], FMT1 % pstate[1]] + FMTU
+                        val = [FMT1 % pstate['atime'],
+                               FMT1 % pstate['mtime']] + FMTU
                         unused[path] = val
                         continue
                 else:
@@ -377,9 +380,9 @@ def cfglog(bump):
 
 def nfs_flush(priors, host=None):
     """Do whatever it takes to force NFS flushing of metadata."""
-    apaths = sorted([os.path.abspath(p) for p in priors if priors[p][2]])
+    apaths = sorted([os.path.abspath(p) for p in priors if priors[p]['needflush']])
     if host and apaths:
-        oldest = int(min((priors[k][1] for k in priors)))
+        oldest = int(min((priors[k]['mtime'] for k in priors)))
         cmd = ['ssh', host, '--', 'xargs', 'touch', '-a', '-t']
         cmd.append(time.strftime('%Y%m%d%H%M', time.localtime(oldest - DELTA)))
         if len(apaths) > 1:
