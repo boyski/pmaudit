@@ -123,18 +123,19 @@ FMT1 = '%.07f'  # Format for one time value
 FMTN = ['-2', '-1']
 FMTU = ['0', '0']
 
-HOSTNAME = 'HOSTNAME'
-BASE = 'BASE'
-CMD = 'CMD'
-FINAL_CMD = 'FINAL_CMD'
-START = 'START'
-PRIOR_COUNT = 'PRIOR_COUNT'
-AFTER_COUNT = 'AFTER_COUNT'
-PREREQS = 'PREREQS'
-INTERMEDIATES = 'INTERMEDIATES'
-FINALS = 'FINALS'
-UNUSED = 'UNUSED'
-DB = 'DB'
+HOSTNAME = 'hostname'
+BASE = 'base'
+CMD = 'cmd'
+FINAL_CMD = 'final_cmd'
+START = 'start'
+PRIOR_COUNT = 'prior_count'
+AFTER_COUNT = 'after_count'
+PREREQS = 'prereqs'
+INTERMEDIATES = 'intermediates'
+FINALS = 'finals'
+UNUSED = 'unused'
+DB = 'db'
+CUSTOM = 'custom'
 
 # I don't think the mtime - atime delta matters except
 # that it must be >1 second to avoid roundoff errors.
@@ -556,7 +557,7 @@ def main():
             if rc != 0:
                 break
         adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
-        adb['CUSTOM'] = custom_results(opts.custom)
+        adb[CUSTOM] = custom_results(opts.custom)
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
             # *Always* create depsfile, even if prqs is empty.
