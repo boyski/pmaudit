@@ -224,7 +224,8 @@ class PMAudit(object):
 
         for watchdir in self.watchdirs:
             # Figure out how atime updates are handled in this filesystem.
-            ref_fname = os.path.join(watchdir, '.audit.%d.tmp' % os.getpid())
+            ref_fname = os.path.join(watchdir,
+                                     '.%s.%d.tmp' % (PROG, os.getpid()))
             with open(ref_fname, 'w') as f:
                 f.write('data\n')
                 ostats = os.fstat(f.fileno())
@@ -267,7 +268,8 @@ class PMAudit(object):
                     if atime >= mtime:
                         atime = mtime - DELTA
                         os.utime(path, (atime, mtime))
-                    self.prior[path] = {'atime': atime, 'mtime': mtime,
+                    self.prior[path] = {'atime': atime,
+                                        'mtime': mtime,
                                         'size': stats.st_size,
                                         'needflush': needflush}
 
