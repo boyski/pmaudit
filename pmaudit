@@ -125,7 +125,8 @@ HOSTNAME = 'hostname'
 BASE = 'base'
 CMD = 'cmd'
 FINAL_CMD = 'final_cmd'
-START = 'start'
+START_TIME = 'start_time'
+END_TIME = 'end_time'
 PRIOR_COUNT = 'prior_count'
 AFTER_COUNT = 'after_count'
 PREREQS = 'prereqs'
@@ -187,6 +188,13 @@ def mkdir_p(new_dir):
     os.makedirs(new_dir, exist_ok=True)
 
 
+def time_details(reftime):
+    """Turn reftime into time information for JSON file."""
+    dt = datetime.datetime.utcfromtimestamp(reftime)
+    refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    return [refstr, FMT1 % reftime]
+
+
 class PMAudit(object):
 
     """Track files used (prereqs) and generated (targets)."""
@@ -201,6 +209,7 @@ class PMAudit(object):
         self.finals = collections.OrderedDict()
         self.unused = collections.OrderedDict()
         self.reftime = None
+        self.endtime = None
         self.prior = {}
 
     def start(self, flush_host=None, keep_going=False):
@@ -362,9 +371,7 @@ class PMAudit(object):
         root[BASE] = os.getcwd()
         root[CMD] = str(cmd)
         root[FINAL_CMD] = final_cmd
-        dt = datetime.datetime.utcfromtimestamp(self.reftime)
-        refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        root[START] = [refstr, FMT1 % self.reftime]
+        root[START_TIME] = time_details(self.reftime)
         root[PRIOR_COUNT] = str(len(self.prior))
         after_count = len(self.prereqs) + len(self.intermediates) + \
             len(self.finals) + len(self.unused)
@@ -374,6 +381,9 @@ class PMAudit(object):
         root[DB][INTERMEDIATES] = self.intermediates
         root[DB][FINALS] = self.finals
         root[DB][UNUSED] = self.unused
+
+        self.endtime = time.time()
+        root[END_TIME] = time_details(self.endtime)
 
         return root
 
