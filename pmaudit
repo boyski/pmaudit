@@ -176,7 +176,7 @@ def os_path_walk(top, func, arg):
 
 def die(message):
     """Report failure message and exit program with failure."""
-    sys.stderr.write(message + '\n')
+    logging.error(message)
     sys.exit(1)
 
 
@@ -228,8 +228,7 @@ class PMAudit(object):
 
         mkflags = os.getenv('MAKEFLAGS')
         if mkflags and ' -j' in mkflags:
-            logging.error('not supported in -j mode')
-            sys.exit(2)
+            die('not supported in -j mode')
 
         for watchdir in self.watchdirs:
             # Figure out how atime updates are handled in this filesystem.
@@ -255,8 +254,7 @@ class PMAudit(object):
                 if nstats.st_atime < nstats.st_mtime:
                     msg = 'atimes not updated in %s' % apath
                     if not keep_going:
-                        logging.error(msg)
-                        sys.exit(2)
+                        die(msg)
                     logging.warning(msg)
                 else:
                     logging.info('NFS flush required in %s', apath)
@@ -476,7 +474,7 @@ def main():
         epilog=__doc__.strip(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        '-c', '--cmd',
+        '-c', action='store_true',
         help="run and audit the specified command line")
     parser.add_argument(
         '--custom', action='append',
@@ -487,8 +485,8 @@ def main():
         metavar='FILE',
         help="save prerequisite data to FILE in makefile format")
     parser.add_argument(
-        '-e', '--errexit', action='store_true',
-        help="run CMD in -e mode")
+        '-e', action='store_true',
+        help="run CMD in -e (errexit) mode")
     parser.add_argument(
         '--flush-host',
         help="a second host from which to force client flushes")
@@ -501,7 +499,7 @@ def main():
         help="continue even if atimes aren't updated")
     parser.add_argument(
         '--multiline', action='store_true',
-        help="separately run each line in the command")
+        help="separately run each line in the -c string")
     parser.add_argument(
         '-A', '--all-involved', action='store_true',
         help="list all involved files")
@@ -524,9 +522,9 @@ def main():
         '-V', '--verbosity', action='count', default=0,
         help="bump verbosity level")
     parser.add_argument(
-        '-W', '--watch', action='append', default=[os.curdir],
+        '-W', '--watch', action='append',
         metavar='DIR',
-        help="audit activity within DIRs (default=%(default)s)")
+        help="audit activity within DIRs (default='.')")
     parser.add_argument(
         '--shell', default='/bin/sh',
         help="name of shell to run (default=%(default)s)")
@@ -534,35 +532,42 @@ def main():
         '--shellflags', default='-c',
         help="space-separated flags to pass to shell (default=%(default)s)")
 
-    if '--' in sys.argv or '-c' in sys.argv or '--cmd' in sys.argv:
+    opts, unparsed = parser.parse_known_args()
+    cfglog(opts.verbosity)
+
+    if '--' in sys.argv or opts.c:
         if '--' in sys.argv:
-            opts, cmd = parser.parse_known_args()
-            cfglog(opts.verbosity)
-            if '--' in cmd:
-                cmd.remove('--')
-            assert not (opts.cmd or opts.errexit)
-            cmds = [cmd]
-            cmd_text = ' '.join(cmd)
+            if '--' in unparsed:
+                unparsed.remove('--')
+            assert not opts.e
+            cmds = [unparsed]
+            cmd_text = ' '.join(unparsed)
         else:
-            opts = parser.parse_args()
-            cfglog(opts.verbosity)
+            cmdstr = unparsed.pop(0)
+            if unparsed:
+                die('unparsed options: %s' % unparsed)
             cmd = [opts.shell]
-            if opts.errexit:
+            if opts.e:
                 cmd.append('-e')
             if opts.verbosity:
                 cmd.append('-x')
             if opts.shellflags:
                 cmd += opts.shellflags.split()
             if opts.multiline:
-                cmds = [cmd + [line] for line in opts.cmd.splitlines()]
+                cmds = [cmd + [line] for line in cmdstr.splitlines()]
             else:
-                cmds = [cmd + [opts.cmd]]
-            cmd_text = opts.cmd
+                cmds = [cmd + [cmdstr]]
+            cmd_text = cmdstr
+
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = '%s.json' % PROG
+
         wdirs = []
-        for word in opts.watch:
-            wdirs.extend(word.split(','))
+        if opts.watch:
+            for word in opts.watch:
+                wdirs.extend(word.split(','))
+        else:
+            wdirs.append(os.curdir)
         exclude_set = set()
         if opts.json:
             exclude_set.add(opts.json)
@@ -595,12 +600,13 @@ def main():
         sys.exit(2 if rc else 0)
 
     # Don't analyze, e.g., report from an existing audit log.
+    # In this mode we are not a wrapper so can reparse the
+    # command line more strictly.
     parser.add_argument(
         'dbfile', default='%s.json' % PROG, nargs='?',
         metavar='FILE',
         help="query audit data from FILE (default=%(default)s)")
     opts = parser.parse_args()
-    cfglog(opts.verbosity)
 
     with open(opts.dbfile, 'r') as f:
         root = json.load(f)
@@ -625,12 +631,11 @@ def main():
     for path in sorted(results):
         sys.stdout.write(path + '\n')
 
-    sys.stdout.flush()
-
 
 if __name__ == '__main__':
     try:
         main()
+        sys.stdout.flush()
     except IOError as e:
         # Workaround for an interpreter bug triggered by SIGPIPE.
         # See http://code.activestate.com/lists/python-tutor/88460/
