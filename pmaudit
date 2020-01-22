@@ -470,6 +470,10 @@ def custom_results(custom_list):
 
 def main():
     """Entry point for standalone use."""
+
+    if len(sys.argv) == 1:
+        sys.argv.append('--help')
+
     parser = argparse.ArgumentParser(
         epilog=__doc__.strip(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
