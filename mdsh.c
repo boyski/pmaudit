@@ -35,8 +35,12 @@ typedef struct {
 static char prog[PATH_MAX] = "??";
 static void *stash;
 
+#define MDSH_DBGSH "MDSH_DBGSH"
+#define MDSH_PS1 "MDSH>> "
 #define MDSH_WATCH "MDSH_WATCH"
 #define MDSH_VERBOSE "MDSH_VERBOSE"
+#define MDSH_XTRACE "MDSH_XTRACE"
+
 #define SEP ","
 #define SHELL "bash"
 
@@ -53,38 +57,53 @@ usage(int rc)
 This program execs bash and passes its arguments directly to\n\
 it without parsing them. It prints this usage message with -h or\n\
 --help but in all other ways it calls through to bash and thus\n\
-behaves exactly the same. The only value it adds is to look at the\n\
-environment variable %s, a comma-separated list of paths\n\
-to keep an eye on, and report when the bash process has changed\n\
-any of their states (created, removed, written, or accessed/read).\n",
-    prog, MDSH_WATCH);
+behaves exactly the same. All value-add comes from environment\n\
+variables listed below which can trigger pre- and post-actions.\n",
+    prog);
 
     fprintf(f, "\n\
-The intention is that changing GNU make's shell to %s will\n\
-allow it to tell us whenever make changes a file we're interested in.\n\
-\nIf the %s variable is present and nonzero the command\n\
-line will be printed along with each change notification.\n",
-    prog, MDSH_VERBOSE);
+The variable %s is a comma-separated list of paths to\n\
+keep an eye on and report when the bash process has changed any\n\
+of their states (created, removed, written, or accessed/read).\n\
+The intention is that setting GNU make's SHELL=%s will allow\n\
+it to tell us whenever a file we're interested in changes.\n",
+    MDSH_WATCH, prog);
+
+    fprintf(f, "\n\
+If the %s variable is nonzero the command line will\n\
+be printed along with each %s change.\n",
+    MDSH_VERBOSE, MDSH_WATCH);
+
+    fprintf(f, "\n\
+If the underlying shell process exits with a failure status and\n\
+%s is nonzero, %s will run an interactive shell to help\n\
+analyze the failing state.\n",
+    MDSH_DBGSH, prog);
+
+    fprintf(f, "\n\
+If %s is nonzero the shell command will be printed as\n\
+with 'set -x'.\n",
+    MDSH_XTRACE);
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
 $ MDSH_WATCH=foo,bar mdsh -c 'touch foo'\n\
-mdsh: =-= CREATED: foo\n\
+mdsh: ==-== CREATED: foo\n\
 \n\
 $ MDSH_WATCH=foo,bar mdsh -c 'touch foo bar'\n\
-mdsh: =-= MODIFIED: foo\n\
-mdsh: =-= CREATED: bar\n\
+mdsh: ==-== MODIFIED: foo\n\
+mdsh: ==-== CREATED: bar\n\
 \n\
 $ MDSH_WATCH=foo,bar mdsh -c 'grep blah foo bar'\n\
-mdsh: =-= ACCESSED: foo\n\
-mdsh: =-= ACCESSED: bar\n\
+mdsh: ==-== ACCESSED: foo\n\
+mdsh: ==-== ACCESSED: bar\n\
 \n\
-$ MDSH_WATCH=foo,bar mdsh -c 'rm -f foo bar'\n\
-mdsh: =-= REMOVED: foo\n\
-mdsh: =-= REMOVED: bar\n\
+$ MDSH_WATCH=foo,bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
+mdsh: ==-== REMOVED: foo [bash -c rm -f foo bar]\n\
+mdsh: ==-== REMOVED: bar [bash -c rm -f foo bar]\n\
 \n\
-$ MDSH_WATCH=foo,bar mdsh -c 'rm -f foo bar'\n\
-(no state change, the files were already gone)\n\
+$ MDSH_WATCH=foo,bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
+(no state change, the files are already gone)\n\
 \nReal-life usage via make:\n\n\
 $ make SHELL=mdsh MDSH_WATCH=foo MDSH_VERBOSE=1\n\
 ");
@@ -124,8 +143,8 @@ changed(const char *path, const char *change, char *argv[])
 {
     char *vb;
 
-    fprintf(stderr, "%s: =-= %s: %s", prog, change, path);
-    if ((vb = getenv(MDSH_VERBOSE)) && *vb && strcmp(vb, "0")) {
+    fprintf(stderr, "%s: ==-== %s: %s", prog, change, path);
+    if ((vb = getenv(MDSH_VERBOSE)) && *vb && strtoul(vb, NULL, 10)) {
         int i;
 
         fprintf(stderr, " [%s ", SHELL);
@@ -143,15 +162,24 @@ changed(const char *path, const char *change, char *argv[])
 int
 main(int argc, char *argv[])
 {
-    int rc = EXIT_SUCCESS;
-    char *watch, *path;
+    int rc = EXIT_SUCCESS, i;
+    char *watch, *path, *xtrace;
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
 
-    while (--argc) {
-        if (!strcmp(argv[argc], "-h") || !strcmp(argv[argc], "--help")) {
-            usage(0);
+    if (!strcmp(argv[argc - 1], "-h") || !strcmp(argv[argc - 1], "--help")) {
+        usage(0);
+    }
+
+    xtrace = getenv(MDSH_XTRACE);
+    if (xtrace && *xtrace) {
+        if (strtoul(xtrace, NULL, 10)) {
+            fputs("+ ", stderr);
+            for (i = 0; i < argc; i++) {
+                fputs(argv[i], stderr);
+                fputc(i < argc - 1 ? ' ' : '\n', stderr);
+            }
         }
     }
 
@@ -226,6 +254,21 @@ main(int argc, char *argv[])
             } else {
                 fprintf(stderr, "%s: Error: lost path!: %s\n", prog, path);
             }
+        }
+    }
+
+    if (rc != EXIT_SUCCESS) {
+        char *dbg;
+
+        if ((dbg = getenv(MDSH_DBGSH)) && *dbg && strtoul(dbg, NULL, 10)) {
+            pid_t pid;
+            insist((pid = fork()) >= 0, "fork()");
+            if (!pid) {  // In the child.
+                insist(!setenv("PS1", MDSH_PS1, 1), NULL);
+                (void)execlp(basename(SHELL), SHELL, "--norc", "-i", (char *)NULL);
+            }
+            // We don't need to know the exit status of the debugging shell.
+            insist(wait(NULL) != -1, "wait()");
         }
     }
 
