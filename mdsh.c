@@ -159,11 +159,25 @@ changed(const char *path, const char *change, char *argv[])
     fputc('\n', stderr);
 }
 
+void
+xtrace(char *xt, int argc, char *argv[])
+{
+    if (xt && *xt && strtoul(xt, NULL, 10)) {
+        int i;
+
+        fputs("+ ", stderr);
+        for (i = 0; i < argc; i++) {
+            fputs(argv[i], stderr);
+            fputc(i < argc - 1 ? ' ' : '\n', stderr);
+        }
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
-    int rc = EXIT_SUCCESS, i;
-    char *watch, *path, *xtrace;
+    int rc = EXIT_SUCCESS;
+    char *watch, *path;
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
@@ -172,16 +186,7 @@ main(int argc, char *argv[])
         usage(0);
     }
 
-    xtrace = getenv(MDSH_XTRACE);
-    if (xtrace && *xtrace) {
-        if (strtoul(xtrace, NULL, 10)) {
-            fputs("+ ", stderr);
-            for (i = 0; i < argc; i++) {
-                fputs(argv[i], stderr);
-                fputc(i < argc - 1 ? ' ' : '\n', stderr);
-            }
-        }
-    }
+    xtrace(getenv(MDSH_XTRACE), argc, argv);
 
     // Record the state (absence/presence and atime/mtime if present) of files.
     if ((watch = getenv(MDSH_WATCH))) {
@@ -264,10 +269,16 @@ main(int argc, char *argv[])
             pid_t pid;
             insist((pid = fork()) >= 0, "fork()");
             if (!pid) {  // In the child.
+                if (!isatty(0)) {
+                    // GNU make with -j tends to close stdin.
+                    (void)close(0);
+                    insist(open("/dev/tty", O_RDONLY) == 0, "open(/dev/tty)");
+                }
                 insist(!setenv("PS1", MDSH_PS1, 1), NULL);
+                xtrace("1", argc, argv);
                 (void)execlp(basename(SHELL), SHELL, "--norc", "-i", (char *)NULL);
             }
-            // We don't need to know the exit status of the debugging shell.
+            // We don't care about the exit status of the debugging shell.
             insist(wait(NULL) != -1, "wait()");
         }
     }
