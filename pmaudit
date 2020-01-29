@@ -616,24 +616,28 @@ def main():
         root = json.load(f)
     db = root[DB]
 
-    results = set()
-
     if opts.all_involved:
         opts.prerequisites = opts.intermediates = opts.final_targets = True
     elif opts.targets:
         opts.intermediates = opts.final_targets = True
 
-    if opts.intermediates:
-        results.update(db[INTERMEDIATES].keys())
-    if opts.prerequisites:
-        results.update(db[PREREQS].keys())
-    if opts.final_targets:
-        results.update(db[FINALS].keys())
-    if opts.unused:
-        results.update(db[UNUSED].keys())
+    results = {}
 
-    for path in sorted(results):
-        sys.stdout.write(path + '\n')
+    if opts.intermediates:
+        results.update(db[INTERMEDIATES])
+    if opts.prerequisites:
+        results.update(db[PREREQS])
+    if opts.final_targets:
+        results.update(db[FINALS])
+    if opts.unused:
+        results.update(db[UNUSED])
+
+    def by_atime(item):
+        """Sort by post-atime."""
+        return float(item[1]['atime'][1])
+
+    for path in [k for k, _ in sorted(results.items(), key=by_atime)]:
+        print(path)
 
 
 if __name__ == '__main__':

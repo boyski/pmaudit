@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright (C) 2010-2018 David Boyce
+ * Copyright (C) 2018-2020 David Boyce
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU General Public License as published by the Free Software
@@ -127,7 +127,7 @@ nftw_pre_callback(const char *fpath, const struct stat *sb,
 
     // Record atimes/mtimes but only after setting atimes behind mtimes
     // for "relatime" reasons.
-    p1 = calloc(sizeof(pathentry_s), 1);
+    insist((p1 = calloc(sizeof(pathentry_s), 1)) != NULL, "calloc(sizeof(pathentry_s))");
     p1->path = strdup(fpath);
     p1->times1[0].tv_sec = sb->st_mtime - 1;
     p1->times1[0].tv_nsec = 0L;
@@ -163,7 +163,7 @@ nftw_post_callback(const char *fpath, const struct stat *sb,
 
     // Record atimes/mtimes but only after setting atime behind mtime
     // for "relatime" reasons.
-    p2 = calloc(sizeof(pathentry_s), 1);
+    insist((p2 = calloc(sizeof(pathentry_s), 1)) != NULL, "calloc(sizeof(pathentry_s))");
     p2->path = strdup(fpath);
     p2->times1[0].tv_sec = -2L;
     p2->times1[1].tv_sec = -1L;

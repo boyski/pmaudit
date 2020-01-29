@@ -1,13 +1,14 @@
 .PHONY: all
-all: pmash
+all: mdsh pmash
 
-pmash: pmash.c
-	$(CC) -g -o $@ -W -Wall $<
+%: %.c
+	$(CC) -g -o $@ -Wall -Wextra $<
 
 .PHONY: install
 install: all
+	cp -a mdsh $$(type -fp mdsh)
 	cp -a pmash $$(type -fp pmash)
 
 .PHONY: clean
 clean:
-	$(RM) pmash
+	$(RM) mdsh pmash
