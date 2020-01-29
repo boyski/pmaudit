@@ -36,6 +36,7 @@ static char prog[PATH_MAX] = "??";
 static void *stash;
 
 #define MDSH_WATCH "MDSH_WATCH"
+#define MDSH_VERBOSE "MDSH_VERBOSE"
 #define SEP ","
 #define SHELL "bash"
 
@@ -47,13 +48,47 @@ usage(int rc)
 {
     FILE *f = (rc == EXIT_SUCCESS) ? stdout : stderr;
 
-    fprintf(f, "%s: The \"Make Diagnosis Shell\".\n\n", prog);
-    fprintf(f, "This program simply execs bash and passes its argv directly to\n");
-    fprintf(f, "bash without parsing it. It does not and can not change what\n");
-    fprintf(f, "bash does; the only value it adds is to look at the environment\n");
-    fprintf(f, "variable %s, a comma-separated list of paths to keep\n", MDSH_WATCH);
-    fprintf(f, "an eye on, and report whenever the bash process changes their\n");
-    fprintf(f, "state (created, removed, written, or read).\n");
+    fprintf(f, "\
+%s: The 'Make Diagnosis Shell', part of the pmaudit suite.\n\n\
+This program execs bash and passes its arguments directly to\n\
+it without parsing them. It prints this usage message with -h or\n\
+--help but in all other ways it calls through to bash and thus\n\
+behaves exactly the same. The only value it adds is to look at the\n\
+environment variable %s, a comma-separated list of paths\n\
+to keep an eye on, and report when the bash process has changed\n\
+any of their states (created, removed, written, or accessed/read).\n",
+    prog, MDSH_WATCH);
+
+    fprintf(f, "\n\
+The intention is that changing GNU make's shell to %s will\n\
+allow it to tell us whenever make changes a file we're interested in.\n\
+\nIf the %s variable is present and nonzero the command\n\
+line will be printed along with each change notification.\n",
+    prog, MDSH_VERBOSE);
+
+    fprintf(f, "\n\
+EXAMPLES:\n\n\
+$ MDSH_WATCH=foo,bar mdsh -c 'touch foo'\n\
+mdsh: =-= CREATED: foo\n\
+\n\
+$ MDSH_WATCH=foo,bar mdsh -c 'touch foo bar'\n\
+mdsh: =-= MODIFIED: foo\n\
+mdsh: =-= CREATED: bar\n\
+\n\
+$ MDSH_WATCH=foo,bar mdsh -c 'grep blah foo bar'\n\
+mdsh: =-= ACCESSED: foo\n\
+mdsh: =-= ACCESSED: bar\n\
+\n\
+$ MDSH_WATCH=foo,bar mdsh -c 'rm -f foo bar'\n\
+mdsh: =-= REMOVED: foo\n\
+mdsh: =-= REMOVED: bar\n\
+\n\
+$ MDSH_WATCH=foo,bar mdsh -c 'rm -f foo bar'\n\
+(no state change, the files were already gone)\n\
+\nReal-life usage via make:\n\n\
+$ make SHELL=mdsh MDSH_WATCH=foo MDSH_VERBOSE=1\n\
+");
+
     exit(rc);
 }
 
@@ -82,6 +117,27 @@ static int
 pathcmp(const void *pa, const void *pb)
 {
     return strcmp(((pathtimes_s *)pa)->path, ((pathtimes_s *)pb)->path);
+}
+
+static void
+changed(const char *path, const char *change, char *argv[])
+{
+    char *vb;
+
+    fprintf(stderr, "%s: =-= %s: %s", prog, change, path);
+    if ((vb = getenv(MDSH_VERBOSE)) && *vb && strcmp(vb, "0")) {
+        int i;
+
+        fprintf(stderr, " [%s ", SHELL);
+        for (i = 1; argv[i]; i++) {
+            fputs(argv[i], stderr);
+            if (argv[i + 1]) {
+                fputc(' ', stderr);
+            }
+        }
+        fputc(']', stderr);
+    }
+    fputc('\n', stderr);
 }
 
 int
@@ -156,15 +212,15 @@ main(int argc, char *argv[])
                 pt = *((pathtimes_s **)py);
                 if (stat(pt->path, &stbuf) == -1) {
                     if (pt->times[0].tv_sec) {
-                        fprintf(stderr, "%s: =-= REMOVED: %s\n", prog, path);
+                        changed(path, "REMOVED", argv);
                     }
                 } else if (!pt->times[0].tv_sec) {
-                    fprintf(stderr, "%s: =-= CREATED: %s\n", prog, path);
+                    changed(path, "CREATED", argv);
                 } else {
                     if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
-                        fprintf(stderr, "%s: =-= MODIFIED: %s\n", prog, path);
+                        changed(path, "MODIFIED", argv);
                     } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
-                        fprintf(stderr, "%s: =-= ACCESSED: %s\n", prog, path);
+                        changed(path, "ACCESSED", argv);
                     }
                 }
             } else {
