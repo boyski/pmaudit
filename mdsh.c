@@ -57,7 +57,7 @@ usage(int rc)
 This program execs bash and passes its arguments directly to\n\
 it without parsing them. It prints this usage message with -h or\n\
 --help but in all other ways it calls through to bash and thus\n\
-behaves exactly the same. All value-add comes from environment\n\
+behaves exactly the same. All its value-add comes from the env\n\
 variables listed below which can trigger pre- and post-actions.\n",
     prog);
 
