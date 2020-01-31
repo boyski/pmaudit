@@ -106,6 +106,8 @@ $ MDSH_WATCH=foo,bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
 (no state change, the files are already gone)\n\
 \nReal-life usage via make:\n\n\
 $ make SHELL=mdsh MDSH_WATCH=foo MDSH_VERBOSE=1\n\
+\n\
+$ make SHELL=mdsh MDSH_DBGSH=1\n\
 ");
 
     exit(rc);
