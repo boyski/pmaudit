@@ -143,22 +143,27 @@ pathcmp(const void *pa, const void *pb)
 static void
 changed(const char *path, const char *change, char *argv[])
 {
-    char *vb;
+    char *vb, *ml;
 
-    fprintf(stderr, "%s: ==-== %s: %s", prog, change, path);
+    if ((ml = getenv("MAKELEVEL"))) {
+        fprintf(stderr, "%s: [%s] ==-== %s: %s", prog, ml, change, path);
+    } else {
+        fprintf(stderr, "%s: ==-== %s: %s", prog, change, path);
+    }
     if ((vb = getenv(MDSH_VERBOSE)) && *vb && strtoul(vb, NULL, 10)) {
         int i;
 
-        fprintf(stderr, " [%s ", SHELL);
+        fprintf(stderr, " (%s ", SHELL);
         for (i = 1; argv[i]; i++) {
             fputs(argv[i], stderr);
             if (argv[i + 1]) {
                 fputc(' ', stderr);
             }
         }
-        fputc(']', stderr);
+        fputc(')', stderr);
     }
     fputc('\n', stderr);
+    insist(!fflush(stderr), "fflush(stderr)");
 }
 
 void
