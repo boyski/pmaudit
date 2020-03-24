@@ -37,11 +37,12 @@ static void *stash;
 
 #define MDSH_DBGSH "MDSH_DBGSH"
 #define MDSH_PS1 "MDSH>> "
-#define MDSH_WATCH "MDSH_WATCH"
+#define MDSH_PATHS "MDSH_PATHS"
 #define MDSH_VERBOSE "MDSH_VERBOSE"
 #define MDSH_XTRACE "MDSH_XTRACE"
 
-#define SEP ","
+#define MARK "==-=="
+#define SEP ":"
 #define SHELL "bash"
 
 #define TIME_GT(left, right) ((left.tv_sec > right.tv_sec) || \
@@ -54,25 +55,25 @@ usage(int rc)
 
     fprintf(f, "\
 %s: The 'Make Diagnosis Shell', part of the pmaudit suite.\n\n\
-This program execs bash and passes its arguments directly to\n\
+This program execs %s and passes its arguments directly to\n\
 it without parsing them. It prints this usage message with -h or\n\
---help but in all other ways it calls through to bash and thus\n\
+--help but in all other ways it calls through to %s and thus\n\
 behaves exactly the same. All its value-add comes from the env\n\
 variables listed below which can trigger pre- and post-actions.\n",
-    prog);
+    prog, SHELL, SHELL);
 
     fprintf(f, "\n\
-The variable %s is a comma-separated list of paths to\n\
-keep an eye on and report when the bash process has changed any\n\
+The variable %s is a colon-separated list of paths to\n\
+keep an eye on and report when the %s process has changed any\n\
 of their states (created, removed, written, or accessed/read).\n\
 The intention is that setting GNU make's SHELL=%s will allow\n\
 it to tell us whenever a file we're interested in changes.\n",
-    MDSH_WATCH, prog);
+    MDSH_PATHS, SHELL, prog);
 
     fprintf(f, "\n\
 If the %s variable is nonzero the command line will\n\
 be printed along with each %s change.\n",
-    MDSH_VERBOSE, MDSH_WATCH);
+    MDSH_VERBOSE, MDSH_PATHS);
 
     fprintf(f, "\n\
 If the underlying shell process exits with a failure status and\n\
@@ -87,28 +88,31 @@ with 'set -x'.\n",
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
-$ MDSH_WATCH=foo,bar mdsh -c 'touch foo'\n\
+$ %s=foo:bar mdsh -c 'touch foo'\n\
 mdsh: ==-== CREATED: foo\n\
 \n\
-$ MDSH_WATCH=foo,bar mdsh -c 'touch foo bar'\n\
+$ %s=foo:bar mdsh -c 'touch foo bar'\n\
 mdsh: ==-== MODIFIED: foo\n\
 mdsh: ==-== CREATED: bar\n\
 \n\
-$ MDSH_WATCH=foo,bar mdsh -c 'grep blah foo bar'\n\
+$ %s=foo:bar mdsh -c 'grep blah foo bar'\n\
 mdsh: ==-== ACCESSED: foo\n\
 mdsh: ==-== ACCESSED: bar\n\
 \n\
-$ MDSH_WATCH=foo,bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
-mdsh: ==-== REMOVED: foo [bash -c rm -f foo bar]\n\
-mdsh: ==-== REMOVED: bar [bash -c rm -f foo bar]\n\
+$ %s=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
+mdsh: ==-== REMOVED: foo [%s -c rm -f foo bar]\n\
+mdsh: ==-== REMOVED: bar [%s -c rm -f foo bar]\n\
 \n\
-$ MDSH_WATCH=foo,bar MDSH_VERBOSE=1 mdsh -c 'rm -f foo bar'\n\
+$ %s=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
 (no state change, the files are already gone)\n\
 \nReal-life usage via make:\n\n\
-$ make SHELL=mdsh MDSH_WATCH=foo MDSH_VERBOSE=1\n\
+$ make SHELL=mdsh %s=foo %s=1\n\
 \n\
-$ make SHELL=mdsh MDSH_DBGSH=1\n\
-");
+$ make SHELL=mdsh %s=1\n\
+",
+        MDSH_PATHS, MDSH_PATHS, MDSH_PATHS, MDSH_PATHS,
+        MDSH_VERBOSE, SHELL, SHELL, MDSH_VERBOSE,
+        MDSH_PATHS, MDSH_PATHS, MDSH_VERBOSE, MDSH_DBGSH);
 
     exit(rc);
 }
@@ -143,25 +147,37 @@ pathcmp(const void *pa, const void *pb)
 static void
 changed(const char *path, const char *change, char *argv[])
 {
-    char *vb, *ml;
+    char *vbev, *mlev;
+    int vb;
 
-    if ((ml = getenv("MAKELEVEL"))) {
-        fprintf(stderr, "%s: [%s] ==-== %s: %s", prog, ml, change, path);
+    vbev = getenv(MDSH_VERBOSE);
+    vb = vbev && *vbev && strtoul(vbev, NULL, 10);
+
+    if (vb && (mlev = getenv("MAKELEVEL"))) {
+        fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, MARK, change, path);
     } else {
-        fprintf(stderr, "%s: ==-== %s: %s", prog, change, path);
+        fprintf(stderr, "%s: %s %s: %s", prog, MARK, change, path);
     }
-    if ((vb = getenv(MDSH_VERBOSE)) && *vb && strtoul(vb, NULL, 10)) {
+
+    if (vb) {
+        char *cwd;
         int i;
 
-        fprintf(stderr, " (%s ", SHELL);
+        insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
+        fprintf(stderr, " [%s] (%s ", cwd, SHELL);
         for (i = 1; argv[i]; i++) {
-            fputs(argv[i], stderr);
+            if (strpbrk(argv[i], " \t")) {
+                fprintf(stderr, "'%s'", argv[i]);
+            } else {
+                fputs(argv[i], stderr);
+            }
             if (argv[i + 1]) {
                 fputc(' ', stderr);
             }
         }
         fputc(')', stderr);
     }
+
     fputc('\n', stderr);
     insist(!fflush(stderr), "fflush(stderr)");
 }
@@ -178,6 +194,7 @@ xtrace(char *xt, int argc, char *argv[])
             fputc(i < argc - 1 ? ' ' : '\n', stderr);
         }
     }
+    insist(!fflush(stderr), "fflush(stderr)");
 }
 
 int
@@ -196,7 +213,7 @@ main(int argc, char *argv[])
     xtrace(getenv(MDSH_XTRACE), argc, argv);
 
     // Record the state (absence/presence and atime/mtime if present) of files.
-    if ((watch = getenv(MDSH_WATCH))) {
+    if ((watch = getenv(MDSH_PATHS))) {
         watch = strdup(watch);
         for (path = strtok(watch, SEP); path; path = strtok(NULL, SEP)) {
             pathtimes_s *pt;
@@ -240,7 +257,7 @@ main(int argc, char *argv[])
     }
 
     // Revisit the original list of files and report any changes.
-    if ((watch = getenv(MDSH_WATCH))) {
+    if ((watch = getenv(MDSH_PATHS))) {
         for (path = strtok(watch, SEP); path; path = strtok(NULL, SEP)) {
             pathtimes_s px, *py, *pt;
 

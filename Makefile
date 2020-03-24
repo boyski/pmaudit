@@ -16,6 +16,15 @@ install: all
 	$(if $(mdsh),cp -a mdsh $(mdsh))
 	$(if $(pmash),cp -a pmash $(pmash))
 
+.PHONY: test_mdsh
+test_mdsh: export MDSH_PATHS=foo:bar
+test_mdsh: mdsh
+	@$(RM) foo bar
+	./$< -c 'uname > foo'
+	./$< -c 'uname > foo; uname > bar'
+	./$< -c 'grep -c . foo bar' > /dev/null
+	./$< -c '$(RM) foo bar'
+
 .PHONY: clean
 clean: cleanups := $(wildcard *.o $(TARGETS))
 clean:
