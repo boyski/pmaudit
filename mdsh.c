@@ -36,6 +36,8 @@ static char prog[PATH_MAX] = "??";
 static void *stash;
 
 #define MDSH_DBGSH "MDSH_DBGSH"
+#define MDSH_EFLAG "MDSH_EFLAG"
+#define MDSH_XTEVS "MDSH_XTEVS"
 #define MDSH_PS1 "MDSH>> "
 #define MDSH_PATHS "MDSH_PATHS"
 #define MDSH_VERBOSE "MDSH_VERBOSE"
@@ -124,6 +126,14 @@ die(char *msg)
     exit(EXIT_FAILURE);
 }
 
+int
+ev2int(const char *ev)
+{
+    char *val;
+
+    return ((val = getenv(ev)) && *val && atoi(val));
+}
+
 void
 insist(int success, const char *term)
 {
@@ -183,17 +193,28 @@ changed(const char *path, const char *change, char *argv[])
 }
 
 void
-xtrace(char *xt, int argc, char *argv[])
+xtrace(int argc, char *argv[])
 {
-    if (xt && *xt && strtoul(xt, NULL, 10)) {
-        int i;
+    int i;
 
-        fputs("+ ", stderr);
-        for (i = 0; i < argc; i++) {
-            fputs(argv[i], stderr);
-            fputc(i < argc - 1 ? ' ' : '\n', stderr);
+    if (getenv(MDSH_XTEVS)) {
+        char *evlist, *ev;
+
+        insist((evlist = strdup(getenv(MDSH_XTEVS))) != NULL, "strdup()");
+        for (ev = strtok(evlist, SEP); ev; ev = strtok(NULL, SEP)) {
+            if (getenv(ev)) {
+                fprintf(stderr, "+++ %s=%s\n", ev, getenv(ev));
+            }
         }
+        (void)free(evlist);
     }
+
+    fputs("+ ", stderr);
+    for (i = 0; i < argc; i++) {
+        fputs(argv[i], stderr);
+        fputc(i < argc - 1 ? ' ' : '\n', stderr);
+    }
+
     insist(!fflush(stderr), "fflush(stderr)");
 }
 
@@ -210,11 +231,13 @@ main(int argc, char *argv[])
         usage(0);
     }
 
-    xtrace(getenv(MDSH_XTRACE), argc, argv);
+    if (ev2int(MDSH_XTRACE)) {
+        xtrace(argc, argv);
+    }
 
     // Record the state (absence/presence and atime/mtime if present) of files.
     if ((watch = getenv(MDSH_PATHS))) {
-        watch = strdup(watch);
+        insist((watch = strdup(watch)) != NULL, "strdup(watch)");
         for (path = strtok(watch, SEP); path; path = strtok(NULL, SEP)) {
             pathtimes_s *pt;
             struct stat stbuf;
@@ -239,7 +262,7 @@ main(int argc, char *argv[])
             }
             insist(tsearch((const void *)pt, &stash, pathcmp) != NULL, "tsearch(&pre)");
         }
-        free(watch);
+        (void)free(watch);
     }
 
     // Fork and exec the shell.
@@ -287,9 +310,7 @@ main(int argc, char *argv[])
     }
 
     if (rc != EXIT_SUCCESS) {
-        char *dbg;
-
-        if ((dbg = getenv(MDSH_DBGSH)) && *dbg && strtoul(dbg, NULL, 10)) {
+        if (ev2int(MDSH_DBGSH)) {
             pid_t pid;
             insist((pid = fork()) >= 0, "fork()");
             if (!pid) {  // In the child.
@@ -299,11 +320,16 @@ main(int argc, char *argv[])
                     insist(open("/dev/tty", O_RDONLY) == 0, "open(/dev/tty)");
                 }
                 insist(!setenv("PS1", MDSH_PS1, 1), NULL);
-                xtrace("1", argc, argv);
+                xtrace(argc, argv);
                 (void)execlp(basename(SHELL), SHELL, "--norc", "-i", (char *)NULL);
             }
             // We don't care about the exit status of the debugging shell.
             insist(wait(NULL) != -1, "wait()");
+        }
+
+        if (ev2int(MDSH_EFLAG)) {
+            fprintf(stderr, "kill -INT %d\n", getppid());
+            (void)kill(getppid(), SIGINT);
         }
     }
 
