@@ -19,6 +19,7 @@
 #include <glob.h>
 #include <libgen.h>
 #include <limits.h>
+#include <regex.h>
 #include <search.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +39,7 @@ static void *stash;
 
 static char **argv_;
 
+#define MDSH_CMDRE "MDSH_CMDRE"
 #define MDSH_DBGSH "MDSH_DBGSH"
 #define MDSH_EFLAG "MDSH_EFLAG"
 #define MDSH_XTEVS "MDSH_XTEVS"
@@ -75,6 +77,13 @@ written, or accessed/read). The intention is that setting GNU\n\
 make's SHELL=%s will allow it to tell us whenever a file we're\n\
 interested in changes.\n",
     SHELL, prog);
+
+    fprintf(f, "\n\
+If a regular expression is supplied with %s it will be\n\
+compared against the shell command. If a match is found an\n\
+interactive debug shell will be invoked before the original\n\
+command is run.\n",
+    MDSH_CMDRE);
 
     fprintf(f, "\n\
 If the %s variable is nonzero the command line will\n\
@@ -267,6 +276,36 @@ xtrace(int argc, char *argv[])
     insist(!fflush(stderr), "fflush(stderr)");
 }
 
+void
+dbgsh(int argc, char *argv[])
+{
+    static int done;
+
+    if (!done++) {
+        pid_t pid;
+
+        xtrace(argc, argv);
+        insist((pid = fork()) >= 0, "fork()");
+        if (!pid) {  // In the child.
+            int fd;
+            // GNU make with -j tends to close stdin, and stdout/stderr might
+            // be redirected too.
+            for (fd = 0; fd < 3; fd++) {
+                if (!isatty(fd)) {
+                    (void)close(fd);
+                    insist(open("/dev/tty", fd ? O_WRONLY : O_RDONLY) == 0,
+                           "open(/dev/tty)");
+                }
+            }
+            insist(!setenv("PS1", MDSH_PS1, 1), NULL);
+            (void)execlp(basename(SHELL), SHELL, "--norc", "-i", (char *)NULL);
+            perror(SHELL); // NOTREACHED
+        }
+        // Ignore the exit status of this debugging shell.
+        insist(wait(NULL) != -1, "wait()");
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -336,6 +375,22 @@ main(int argc, char *argv[])
         (void)free(watch);
     }
 
+    if (getenv(MDSH_CMDRE)) {
+        size_t i;
+        regex_t re;
+
+        insist(regcomp(&re, getenv(MDSH_CMDRE), REG_EXTENDED) == 0, "regcomp()");
+        for (i = 1; argv[i]; i++) {
+            if (argv[i - 1][0] == '-' && strchr(argv[i - 1], 'c')) {
+                if (!regexec(&re, argv[i], 0, NULL, 0)) {
+                    dbgsh(argc, argv);
+                    break;
+                }
+            }
+        }
+        regfree(&re);
+    }
+
     // Fork and exec the shell.
     {
         pid_t pid;
@@ -355,20 +410,7 @@ main(int argc, char *argv[])
 
     if (rc != EXIT_SUCCESS) {
         if (ev2int(MDSH_DBGSH)) {
-            pid_t pid;
-            insist((pid = fork()) >= 0, "fork()");
-            if (!pid) {  // In the child.
-                if (!isatty(0)) {
-                    // GNU make with -j tends to close stdin.
-                    (void)close(0);
-                    insist(open("/dev/tty", O_RDONLY) == 0, "open(/dev/tty)");
-                }
-                insist(!setenv("PS1", MDSH_PS1, 1), NULL);
-                xtrace(argc, argv);
-                (void)execlp(basename(SHELL), SHELL, "--norc", "-i", (char *)NULL);
-            }
-            // We don't care about the exit status of the debugging shell.
-            insist(wait(NULL) != -1, "wait()");
+            dbgsh(argc, argv);
         }
 
         if (ev2int(MDSH_EFLAG)) {
