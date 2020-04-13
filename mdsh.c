@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <libgen.h>
 #include <limits.h>
 #include <search.h>
@@ -34,6 +35,8 @@ typedef struct {
 
 static char prog[PATH_MAX] = "??";
 static void *stash;
+
+static char **argv_;
 
 #define MDSH_DBGSH "MDSH_DBGSH"
 #define MDSH_EFLAG "MDSH_EFLAG"
@@ -65,17 +68,18 @@ variables listed below which can trigger pre- and post-actions.\n",
     prog, SHELL, SHELL);
 
     fprintf(f, "\n\
-The variable %s is a colon-separated list of paths to\n\
-keep an eye on and report when the %s process has changed any\n\
-of their states (created, removed, written, or accessed/read).\n\
-The intention is that setting GNU make's SHELL=%s will allow\n\
-it to tell us whenever a file we're interested in changes.\n",
-    MDSH_PATHS, SHELL, prog);
+The variable MDSH_PATHS is a colon-separated list of glob patterns\n\
+representing paths to keep an eye on and report when the %s\n\
+process has changed any of their states (created, removed,\n\
+written, or accessed/read). The intention is that setting GNU\n\
+make's SHELL=%s will allow it to tell us whenever a file we're\n\
+interested in changes.\n",
+    SHELL, prog);
 
     fprintf(f, "\n\
 If the %s variable is nonzero the command line will\n\
-be printed along with each %s change.\n",
-    MDSH_VERBOSE, MDSH_PATHS);
+be printed along with each MDSH_PATHS change.\n",
+    MDSH_VERBOSE);
 
     fprintf(f, "\n\
 If the underlying shell process exits with a failure status and\n\
@@ -90,31 +94,29 @@ with 'set -x'.\n",
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
-$ %s=foo:bar mdsh -c 'touch foo'\n\
+$ MDSH_PATHS=foo:bar mdsh -c 'touch foo'\n\
 mdsh: ==-== CREATED: foo\n\
 \n\
-$ %s=foo:bar mdsh -c 'touch foo bar'\n\
+$ MDSH_PATHS=foo:bar mdsh -c 'touch foo bar'\n\
 mdsh: ==-== MODIFIED: foo\n\
 mdsh: ==-== CREATED: bar\n\
 \n\
-$ %s=foo:bar mdsh -c 'grep blah foo bar'\n\
+$ MDSH_PATHS=foo:bar mdsh -c 'grep blah foo bar'\n\
 mdsh: ==-== ACCESSED: foo\n\
 mdsh: ==-== ACCESSED: bar\n\
 \n\
-$ %s=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
+$ MDSH_PATHS=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
 mdsh: ==-== REMOVED: foo [%s -c rm -f foo bar]\n\
 mdsh: ==-== REMOVED: bar [%s -c rm -f foo bar]\n\
 \n\
-$ %s=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
+$ MDSH_PATHS=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
 (no state change, the files are already gone)\n\
 \nReal-life usage via make:\n\n\
-$ make SHELL=mdsh %s=foo %s=1\n\
+$ make SHELL=mdsh MDSH_PATHS=foo %s=1\n\
 \n\
 $ make SHELL=mdsh %s=1\n\
 ",
-        MDSH_PATHS, MDSH_PATHS, MDSH_PATHS, MDSH_PATHS,
-        MDSH_VERBOSE, SHELL, SHELL, MDSH_VERBOSE,
-        MDSH_PATHS, MDSH_PATHS, MDSH_VERBOSE, MDSH_DBGSH);
+    MDSH_VERBOSE, SHELL, SHELL, MDSH_VERBOSE, MDSH_VERBOSE, MDSH_DBGSH);
 
     exit(rc);
 }
@@ -155,7 +157,7 @@ pathcmp(const void *pa, const void *pb)
 }
 
 static void
-changed(const char *path, const char *change, char *argv[])
+report(const char *path, const char *change)
 {
     char *vbev, *mlev;
     int vb;
@@ -175,13 +177,13 @@ changed(const char *path, const char *change, char *argv[])
 
         insist((cwd = getcwd(NULL, 0)) != NULL, "getcwd(NULL, 0)");
         fprintf(stderr, " [%s] (%s ", cwd, SHELL);
-        for (i = 1; argv[i]; i++) {
-            if (strpbrk(argv[i], " \t")) {
-                fprintf(stderr, "'%s'", argv[i]);
+        for (i = 1; argv_[i]; i++) {
+            if (strpbrk(argv_[i], " \t")) {
+                fprintf(stderr, "'%s'", argv_[i]);
             } else {
-                fputs(argv[i], stderr);
+                fputs(argv_[i], stderr);
             }
-            if (argv[i + 1]) {
+            if (argv_[i + 1]) {
                 fputc(' ', stderr);
             }
         }
@@ -190,6 +192,53 @@ changed(const char *path, const char *change, char *argv[])
 
     fputc('\n', stderr);
     insist(!fflush(stderr), "fflush(stderr)");
+}
+
+static void
+watch_walk(const void *nodep, const VISIT which, const int depth)
+{
+    pathtimes_s *pt = *((pathtimes_s **)nodep);
+    struct stat stbuf;
+    glob_t refound;
+    size_t i;
+
+    (void)depth; // don't need this
+
+    if (which != leaf && which != postorder) {
+        return;
+    }
+
+    (void)memset(&refound, 0, sizeof(refound));
+    switch (glob(pt->path, 0, NULL, &refound)) {
+        case 0:
+            for (i = 0; i < refound.gl_pathc; i++) {
+                char *path = refound.gl_pathv[i];
+
+                if (stat(path, &stbuf) == -1) {
+                    if (pt->times[0].tv_sec) {
+                        report(path, "DELETED");
+                    }
+                } else if (!pt->times[0].tv_sec) {
+                    report(path, "CREATED");
+                } else {
+                    if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
+                        report(path, "MODIFIED");
+                    } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
+                        report(path, "ACCESSED");
+                    }
+                }
+            }
+            break;
+        case GLOB_NOMATCH:
+            if (pt->times[0].tv_sec) {
+                report(pt->path, "REMOVED");
+            }
+            break;
+        default:
+            insist(0, pt->path);
+    }
+
+    globfree(&refound);
 }
 
 void
@@ -222,7 +271,9 @@ int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *watch, *path;
+    char *watch, *pattern;
+
+    argv_ = argv; // Hack to preserve command line for later verbosity.
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
@@ -237,14 +288,32 @@ main(int argc, char *argv[])
 
     // Record the state (absence/presence and atime/mtime if present) of files.
     if ((watch = getenv(MDSH_PATHS))) {
+        size_t i;
+        glob_t found;
+        int globflags = GLOB_NOCHECK;
+
+        // Run through the patterns, deriving a list of matched paths.
+        (void)memset(&found, 0, sizeof(found));
         insist((watch = strdup(watch)) != NULL, "strdup(watch)");
-        for (path = strtok(watch, SEP); path; path = strtok(NULL, SEP)) {
+        for (pattern = strtok(watch, SEP); pattern; pattern = strtok(NULL, SEP)) {
+            switch (glob(pattern, globflags, NULL, &found)) {
+                case 0:
+                case GLOB_NOMATCH:
+                    break;
+                default:
+                    insist(0, pattern);
+                    break;
+            }
+            globflags |= GLOB_APPEND;
+        }
+
+        for (i = 0; i < found.gl_pathc; i++) {
             pathtimes_s *pt;
             struct stat stbuf;
 
             insist((pt = calloc(sizeof(pathtimes_s), 1)) != NULL, "calloc(pathtimes_s)");
-            pt->path = strdup(path);
-            if (stat(path, &stbuf) != -1) {
+            pt->path = strdup(found.gl_pathv[i]);
+            if (stat(pt->path, &stbuf) != -1) {
                 pt->times[0].tv_sec = stbuf.st_atim.tv_sec;
                 pt->times[0].tv_nsec = stbuf.st_atim.tv_nsec;
                 pt->times[1].tv_sec = stbuf.st_mtim.tv_sec;
@@ -253,7 +322,7 @@ main(int argc, char *argv[])
                 if (stbuf.st_atim.tv_sec >= pt->times[1].tv_nsec) {
                     pt->times[0].tv_sec = pt->times[1].tv_sec - 2;
                     pt->times[0].tv_nsec = 999;
-                    if (utimensat(AT_FDCWD, path, pt->times, 0) == -1) {
+                    if (utimensat(AT_FDCWD, pt->path, pt->times, 0) == -1) {
                         fprintf(stderr, "%s: Error: %s\n", prog, strerror(errno));
                     }
                 }
@@ -262,6 +331,8 @@ main(int argc, char *argv[])
             }
             insist(tsearch((const void *)pt, &stash, pathcmp) != NULL, "tsearch(&pre)");
         }
+
+        globfree(&found);
         (void)free(watch);
     }
 
@@ -280,34 +351,7 @@ main(int argc, char *argv[])
     }
 
     // Revisit the original list of files and report any changes.
-    if ((watch = getenv(MDSH_PATHS))) {
-        for (path = strtok(watch, SEP); path; path = strtok(NULL, SEP)) {
-            pathtimes_s px, *py, *pt;
-
-            (void)memset(&px, '\0', sizeof(px)); // unneeded
-            px.path = path;
-            if ((py = tfind(&px, &stash, pathcmp))) {
-                struct stat stbuf;
-
-                pt = *((pathtimes_s **)py);
-                if (stat(pt->path, &stbuf) == -1) {
-                    if (pt->times[0].tv_sec) {
-                        changed(path, "REMOVED", argv);
-                    }
-                } else if (!pt->times[0].tv_sec) {
-                    changed(path, "CREATED", argv);
-                } else {
-                    if (TIME_GT(stbuf.st_mtim, pt->times[1])) {
-                        changed(path, "MODIFIED", argv);
-                    } else if (TIME_GT(stbuf.st_atim, pt->times[0])) {
-                        changed(path, "ACCESSED", argv);
-                    }
-                }
-            } else {
-                fprintf(stderr, "%s: Error: lost path!: %s\n", prog, path);
-            }
-        }
-    }
+    twalk(stash, watch_walk);
 
     if (rc != EXIT_SUCCESS) {
         if (ev2int(MDSH_DBGSH)) {
