@@ -23,7 +23,7 @@ test_mdsh: mdsh
 	./$< -c 'uname > foo'
 	./$< -c 'touch foo foobar'
 	./$< -c 'uname > foo; uname > bar'
-	sleep 1; ./$< -c 'grep -c . foo bar > /dev/null'
+	./$< -c 'grep -c . foo bar > /dev/null'
 	./$< -c '$(RM) foo* bar'
 
 .PHONY: clean

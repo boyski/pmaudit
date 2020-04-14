@@ -224,9 +224,7 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
                 char *path = refound.gl_pathv[i];
 
                 if (stat(path, &stbuf) == -1) {
-                    if (pt->times[0].tv_sec) {
-                        report(path, "DELETED");
-                    }
+                    perror(path);
                 } else if (!pt->times[0].tv_sec) {
                     report(path, "CREATED");
                 } else {
