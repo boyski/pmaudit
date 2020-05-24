@@ -26,6 +26,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -45,6 +46,7 @@ static char **argv_;
 #define MDSH_XTEVS "MDSH_XTEVS"
 #define MDSH_PS1 "MDSH>> "
 #define MDSH_PATHS "MDSH_PATHS"
+#define MDSH_TIMING "MDSH_TIMING"
 #define MDSH_VERBOSE "MDSH_VERBOSE"
 #define MDSH_XTRACE "MDSH_XTRACE"
 
@@ -62,44 +64,47 @@ usage(int rc)
 
     fprintf(f, "\
 %s: The 'Make Diagnosis Shell', part of the pmaudit suite.\n\n\
-This program execs %s and passes its arguments directly to\n\
-it without parsing them. It prints this usage message with -h or\n\
---help but in all other ways it calls through to %s and thus\n\
-behaves exactly the same. All its value-add comes from the env\n\
-variables listed below which can trigger pre- and post-actions.\n",
-    prog, SHELL, SHELL);
+This program execs %s and passes its argv directly to it\n\
+without parsing. It prints this usage message with -h or\n\
+--help but in all other ways it's a pass-through to %s\n\
+and thus behaves exactly the same. All its value-added\n\
+comes from the env variables listed below which can trigger\n\
+pre- and post-actions. The idea is that setting GNU make's\n\
+SHELL=%s along with some subset of the environment variables\n\
+listed below may help diagnose complex make problems.\n",
+    prog, SHELL, SHELL, prog);
 
     fprintf(f, "\n\
 The variable MDSH_PATHS is a colon-separated list of glob patterns\n\
-representing paths to keep an eye on and report when the %s\n\
+representing paths to keep an eye on and report when the shell\n\
 process has changed any of their states (created, removed,\n\
 written, or accessed/read). The intention is that setting GNU\n\
 make's SHELL=%s will allow it to tell us whenever a file we're\n\
 interested in changes.\n",
-    SHELL, prog);
+    prog);
 
     fprintf(f, "\n\
-If a regular expression is supplied with %s it will be\n\
+If the MDSH_VERBOSE variable is set (nonzero) the command line\n\
+will be printed along with each MDSH_PATHS change.\n");
+
+    fprintf(f, "\n\
+If MDSH_XTRACE is set the shell command will be printed as\n\
+with 'set -x'.\n");
+
+    fprintf(f, "\n\
+MDSH_TIMING is similar to MDSH_XTRACE but the command is\n\
+printed after it finishes along with the time it took.\n");
+
+    fprintf(f, "\n\
+If a regular expression is supplied with MDSH_CMDRE it will be\n\
 compared against the shell command. If a match is found an\n\
-interactive debug shell will be invoked before the original\n\
-command is run.\n",
-    MDSH_CMDRE);
-
-    fprintf(f, "\n\
-If the %s variable is nonzero the command line will\n\
-be printed along with each MDSH_PATHS change.\n",
-    MDSH_VERBOSE);
+interactive debug shell will be invoked before the command runs.\n");
 
     fprintf(f, "\n\
 If the underlying shell process exits with a failure status and\n\
-%s is nonzero, %s will run an interactive shell to help\n\
+MDSH_DBGSH is set, %s will run an interactive shell to help\n\
 analyze the failing state.\n",
-    MDSH_DBGSH, prog);
-
-    fprintf(f, "\n\
-If %s is nonzero the shell command will be printed as\n\
-with 'set -x'.\n",
-    MDSH_XTRACE);
+    prog);
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
@@ -249,7 +254,7 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
 }
 
 void
-xtrace(int argc, char *argv[])
+xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 {
     int i;
 
@@ -265,12 +270,17 @@ xtrace(int argc, char *argv[])
         (void)free(evlist);
     }
 
-    fputs("+ ", stderr);
+    fputs(pfx ? pfx : "+ ", stderr);
     for (i = 0; i < argc; i++) {
         fputs(argv[i], stderr);
-        fputc(i < argc - 1 ? ' ' : '\n', stderr);
+        if (i < argc - 1) {
+            fputc(' ', stderr);
+        }
     }
-
+    if (timing) {
+        fprintf(stderr, " (%s)", timing);
+    }
+    fputc('\n', stderr);
     insist(!fflush(stderr), "fflush(stderr)");
 }
 
@@ -282,7 +292,7 @@ dbgsh(int argc, char *argv[])
     if (!done++) {
         pid_t pid;
 
-        xtrace(argc, argv);
+        xtrace(argc, argv, NULL, NULL);
         insist((pid = fork()) >= 0, "fork()");
         if (!pid) {  // In the child.
             int fd;
@@ -309,6 +319,7 @@ main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
     char *watch, *pattern;
+    struct timeval pretime;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
 
@@ -320,7 +331,7 @@ main(int argc, char *argv[])
     }
 
     if (ev2int(MDSH_XTRACE)) {
-        xtrace(argc, argv);
+        xtrace(argc, argv, NULL, NULL);
     }
 
     // Record the state (absence/presence and atime/mtime if present) of files.
@@ -389,7 +400,11 @@ main(int argc, char *argv[])
         regfree(&re);
     }
 
-    // Fork and exec the shell.
+    if (ev2int(MDSH_TIMING)) {
+        insist(!gettimeofday(&pretime, NULL), "gettimeofday(&pretime, NULL)");
+    }
+
+    // Fork, exec, and wait for the shell.
     {
         pid_t pid;
         int status = EXIT_SUCCESS;
@@ -401,6 +416,18 @@ main(int argc, char *argv[])
         }
         insist(wait(&status) != -1, "wait()");
         rc = WEXITSTATUS(status);
+    }
+
+    if (ev2int(MDSH_TIMING)) {
+        struct timeval endtime;
+        char tbuf[256];
+        double delta;
+
+        insist(!gettimeofday(&endtime, NULL), "gettimeofday(&endtime, NULL)");
+        delta = ((endtime.tv_sec * 1000000.0) + endtime.tv_usec) -
+                ((pretime.tv_sec * 1000000.0) + pretime.tv_usec);
+        (void)snprintf(tbuf, sizeof(tbuf), "%.1fs", delta / 1000000.0);
+        xtrace(argc, argv, "- ", tbuf);
     }
 
     // Revisit the original list of files and report any changes.
