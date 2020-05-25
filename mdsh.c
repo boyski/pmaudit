@@ -125,7 +125,11 @@ mdsh: ==-== REMOVED: bar [%s -c rm -f foo bar]\n\
 \n\
 $ MDSH_PATHS=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
 (no state change, the files are already gone)\n\
-\nReal-life usage via make:\n\n\
+\n\
+$ MDSH_TIMING=1 mdsh -c 'sleep 2.4'\n\
+- mdsh -c sleep 2.4 (2.4s)\n\
+\n\
+Real-life usage via make:\n\n\
 $ make SHELL=mdsh MDSH_PATHS=foo %s=1\n\
 \n\
 $ make SHELL=mdsh %s=1\n\
@@ -272,7 +276,14 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 
     fputs(pfx ? pfx : "+ ", stderr);
     for (i = 0; i < argc; i++) {
-        fputs(argv[i], stderr);
+        // The handling of whitespace and quoting here is rudimentary
+        // but it's only for visual purposes. No commitment is made
+        // that output can be safely fed back to the shell.
+        if (strchr(argv[i], ' ') || strchr(argv[i], '\t')) {
+            fprintf(stderr, "'%s'", argv[i]);
+        } else {
+            fputs(argv[i], stderr);
+        }
         if (i < argc - 1) {
             fputc(' ', stderr);
         }

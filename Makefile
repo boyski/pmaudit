@@ -25,6 +25,8 @@ test_mdsh: mdsh
 	./$< -c 'uname > foo; uname > bar'
 	./$< -c 'grep -c . foo bar > /dev/null'
 	./$< -c '$(RM) foo* bar'
+	MDSH_XTRACE=1 ./$< -c 'uname'
+	MDSH_TIMING=1 ./$< -c 'uname; sleep 2'
 
 .PHONY: clean
 clean: cleanups := $(wildcard *.o $(TARGETS))
