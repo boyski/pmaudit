@@ -64,28 +64,25 @@ usage(int rc)
 
     fprintf(f, "\
 %s: The 'Make Diagnosis Shell', part of the pmaudit suite.\n\n\
-This program execs %s and passes its argv directly to it\n\
-without parsing. It prints this usage message with -h or\n\
---help but in all other ways it's a pass-through to %s\n\
-and thus behaves exactly the same. All its value-added\n\
-comes from the env variables listed below which can trigger\n\
-pre- and post-actions. The idea is that setting GNU make's\n\
+This program execs the shell and passes its argv directly to it\n\
+unparsed. It prints this usage message with -h or --help\n\
+but in all other ways it's a pass-through to the shell and\n\
+thus behaves exactly the same. Its only value-added comes\n\
+from the env variables listed below which can trigger pre-\n\
+and post-actions. The idea is that setting GNU make's\n\
 SHELL=%s along with some subset of the environment variables\n\
 listed below may help diagnose complex make problems.\n",
-    prog, SHELL, SHELL, prog);
+    prog, prog);
 
     fprintf(f, "\n\
 The variable MDSH_PATHS is a colon-separated list of glob patterns\n\
 representing paths to keep an eye on and report when the shell\n\
 process has changed any of their states (created, removed,\n\
-written, or accessed/read). The intention is that setting GNU\n\
-make's SHELL=%s will allow it to tell us whenever a file we're\n\
-interested in changes.\n",
-    prog);
+written, or accessed/read).\n");
 
     fprintf(f, "\n\
 If the MDSH_VERBOSE variable is set (nonzero) the command line\n\
-will be printed along with each MDSH_PATHS change.\n");
+will be printed along with each MDSH_PATHS change message.\n");
 
     fprintf(f, "\n\
 If MDSH_XTRACE is set the shell command will be printed as\n\
@@ -107,6 +104,11 @@ analyze the failing state.\n",
     prog);
 
     fprintf(f, "\n\
+However, be aware that starting an interactive debug shell can\n\
+run into trouble in -j mode which sometimes closes stdin. Such a\n\
+shell requires stdin and stdout to be available to the terminal.\n");
+
+    fprintf(f, "\n\
 EXAMPLES:\n\n\
 $ MDSH_PATHS=foo:bar mdsh -c 'touch foo'\n\
 mdsh: ==-== CREATED: foo\n\
@@ -124,13 +126,13 @@ mdsh: ==-== REMOVED: foo [%s -c rm -f foo bar]\n\
 mdsh: ==-== REMOVED: bar [%s -c rm -f foo bar]\n\
 \n\
 $ MDSH_PATHS=foo:bar %s=1 mdsh -c 'rm -f foo bar'\n\
-(no state change, the files are already gone)\n\
+(no state change messages, the files are already gone)\n\
 \n\
 $ MDSH_TIMING=1 mdsh -c 'sleep 2.4'\n\
 - mdsh -c sleep 2.4 (2.4s)\n\
 \n\
 Real-life usage via make:\n\n\
-$ make SHELL=mdsh MDSH_PATHS=foo %s=1\n\
+$ MDSH_PATHS=foo %s=1 make SHELL=mdsh\n\
 \n\
 $ make SHELL=mdsh %s=1\n\
 ",
