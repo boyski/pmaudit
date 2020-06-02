@@ -14,11 +14,15 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
 
+#define _GNU_SOURCE
+
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
 #include <libgen.h>
 #include <limits.h>
+#include <netdb.h>
 #include <regex.h>
 #include <search.h>
 #include <stdio.h>
@@ -39,10 +43,13 @@ static char prog[PATH_MAX] = "??";
 static void *stash;
 
 static char **argv_;
+static int verbose;
 
 #define MDSH_CMDRE "MDSH_CMDRE"
 #define MDSH_DBGSH "MDSH_DBGSH"
 #define MDSH_EFLAG "MDSH_EFLAG"
+#define MDSH_FLUSH_PATHS "MDSH_FLUSH_PATHS"
+#define MDSH_HTTP_SERVER "MDSH_HTTP_SERVER"
 #define MDSH_XTEVS "MDSH_XTEVS"
 #define MDSH_PS1 "MDSH>> "
 #define MDSH_PATHS "MDSH_PATHS"
@@ -141,22 +148,16 @@ $ make SHELL=mdsh %s=1\n\
     exit(rc);
 }
 
-void
-die(char *msg)
-{
-    fprintf(stderr, "%s: Error: %s\n", prog, msg);
-    exit(EXIT_FAILURE);
-}
-
-int
+static int
 ev2int(const char *ev)
 {
     char *val;
 
-    return ((val = getenv(ev)) && *val && atoi(val));
+    val = getenv(ev);
+    return val && *val ? atoi(val) : 0;
 }
 
-void
+static void
 insist(int success, const char *term)
 {
     if (success) {
@@ -179,19 +180,15 @@ pathcmp(const void *pa, const void *pb)
 static void
 report(const char *path, const char *change)
 {
-    char *vbev, *mlev;
-    int vb;
+    char *mlev;
 
-    vbev = getenv(MDSH_VERBOSE);
-    vb = vbev && *vbev && strtoul(vbev, NULL, 10);
-
-    if (vb && (mlev = getenv("MAKELEVEL"))) {
+    if (verbose && (mlev = getenv("MAKELEVEL"))) {
         fprintf(stderr, "%s: [%s] %s %s: %s", prog, mlev, MARK, change, path);
     } else {
         fprintf(stderr, "%s: %s %s: %s", prog, MARK, change, path);
     }
 
-    if (vb) {
+    if (verbose) {
         char *cwd;
         int i;
 
@@ -259,7 +256,7 @@ watch_walk(const void *nodep, const VISIT which, const int depth)
     globfree(&refound);
 }
 
-void
+static void
 xtrace(int argc, char *argv[], const char *pfx, const char *timing)
 {
     int i;
@@ -297,7 +294,7 @@ xtrace(int argc, char *argv[], const char *pfx, const char *timing)
     insist(!fflush(stderr), "fflush(stderr)");
 }
 
-void
+static void
 dbgsh(int argc, char *argv[])
 {
     static int done;
@@ -327,14 +324,212 @@ dbgsh(int argc, char *argv[])
     }
 }
 
+/*
+ * As I understand it, when a change is made to file or directory X on
+ * host A the client may choose to cache anything (data or metadata)
+ * but it always makes one synchronous round trip communication to
+ * the server to say "Hey, I've got a dirty cache for X" so the server
+ * will always know about the caching. Because of that, when a request
+ * for X comes in on host B the server will go back to host A and say
+ * "Give me what you've got" before responding to B. Thus, all cached
+ * results on any other host are guaranteed to be flushed to the server
+ * before the response to B.
+ *
+ * To make use of this we can rely on an HTTP 1.1 web server which has
+ * read access to all of NFS and runs on a dedicated machine and will
+ * therefore fulfill the requirements of a "host B" for any "host A".
+ */
+static int
+http_request(const char *host, const char *path)
+{
+    struct addrinfo *result, hints;
+    struct stat stbuf;
+    int retval, srvfd, count;
+    char *abspath, *slash, *request;
+    char readbuf[1024];
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if ((retval = getaddrinfo(host, "80", &hints, &result))) {
+        fprintf(stderr, "%s: Error: %s: %s\n", prog, host, gai_strerror(retval));
+        return EXIT_FAILURE;
+    }
+
+    if ((srvfd = socket(result->ai_family, SOCK_STREAM, 0)) == -1) {
+        perror("socket()");
+        return EXIT_FAILURE;
+    }
+
+    if ((connect(srvfd, result->ai_addr, result->ai_addrlen) == -1)) {
+        perror("connect()");
+        return EXIT_FAILURE;
+    }
+
+    insist((abspath = realpath(path, NULL)) != NULL, "realpath(path)");
+    slash = (!stat(abspath, &stbuf) && S_ISDIR(stbuf.st_mode)) ? "/" : "";
+    if (asprintf(&request,
+        "GET %s%s HTTP/1.1\nHost: %s\nUser-agent: %s\nRange: bytes=0-%lu\n\n",
+            abspath, slash, host, prog, sizeof(readbuf) - 1) == -1) {
+        perror("asprintf()");
+        return EXIT_FAILURE;
+    }
+    free(abspath);
+
+    if (verbose) {
+            size_t len = verbose > 1 ? strlen(request) :
+                (size_t)(strchr(request, '\n') - request) + 1;
+            (void)fwrite(request, sizeof(char), len, stderr);
+    }
+
+    if (write(srvfd, request, strlen(request)) == -1) {
+        perror("write()");
+        return EXIT_FAILURE;
+    }
+
+    if (shutdown(srvfd, SHUT_WR) == -1) {
+        perror("shutdown()");
+        return EXIT_FAILURE;
+    }
+
+    // We don't really need to read the whole file - it should be
+    // enough to make and satisfy any read request. If the first
+    // line doesn't look like "206 Partial-Content" we dump the
+    // buffer as an ersatz error message.
+    if ((count = read(srvfd, readbuf, sizeof(readbuf))) == -1) {
+        if (write(1, readbuf, count) == -1) {
+            perror("read()");
+            return EXIT_FAILURE;
+        }
+    } else {
+        char *nl, *ok;
+
+        nl = strchr(readbuf, '\n');
+        ok = strstr(readbuf, " 206 ");
+        if (!nl || !ok || ok > nl) {
+            fputs(readbuf, stderr);
+            return EXIT_FAILURE;
+        }
+    }
+
+    if (close(srvfd) == -1) {
+        perror("close()");
+        return EXIT_FAILURE;
+    }
+
+    free(request);
+
+    return 0;
+}
+
+static void
+create_remove(const char *path)
+{
+    char *tmpf;
+    int fd;
+
+    if (asprintf(&tmpf, "%s/.nfs_flush-%d.tmp", path, (int)getpid()) == -1) {
+        perror("asprintf");
+    } else {
+        if (verbose) {
+            fprintf(stderr, "create(%s)\n", tmpf);
+        }
+        if ((fd = open(tmpf, O_CREAT | O_EXCL, 0666)) == -1) {
+            fprintf(stderr, "creat(%s): %s\n", tmpf, strerror(errno));
+        } else {
+            if (verbose) {
+                fprintf(stderr, "remove(%s)\n", tmpf);
+            }
+            if (close(fd) == -1) {
+                fprintf(stderr, "close(%s): %s\n", tmpf, strerror(errno));
+            }
+            if (unlink(tmpf) == -1) {
+                fprintf(stderr, "unlink(%s): %s\n", tmpf, strerror(errno));
+            }
+        }
+
+        free(tmpf);
+    }
+}
+
+static int
+nfs_flush_dir(const char *path)
+{
+    DIR *odir;
+
+    // Rather than check whether it's a directory, just run opendir
+    // and let it fail if not.
+    if ((odir = opendir(path))) {
+        if (verbose) {
+            fprintf(stderr, "opendir(\"%s\")\n", path);
+            fprintf(stderr, "closedir(\"%s\")\n", path);
+        }
+        (void)closedir(odir);
+
+        // Create and remove a temp file to tickle the filehandle cache.
+        create_remove(path);
+
+        return 0;
+    }
+
+    return 1;
+}
+
+static int
+nfs_flush(const char *fpath)
+{
+    DIR *odir;
+    char *http_host;
+
+    nfs_flush_dir(fpath);
+
+    http_host = getenv(MDSH_HTTP_SERVER);
+
+    if (http_host) {
+        (void)http_request(http_host, fpath);
+    }
+
+    /* Flush the immediate subdirs of each dir. */
+    if ((odir = opendir(fpath))) {
+        struct dirent *dp;
+        char *tpath;
+
+        while ((dp = readdir(odir))) {
+            if (!strcmp(dp->d_name, ".git") || !strcmp(dp->d_name, ".svn")) {
+                // Ignore obvious SCM/VCS subdirectories.
+            } else if (dp->d_name[0] == '.') {
+                // Ignore all "dot" files, unlikely to be used in a build.
+            } else if (strcmp(dp->d_name, "..") && strcmp(dp->d_name, ".")) {
+                if (asprintf(&tpath, "%s/%s", fpath, dp->d_name) == -1) {
+                    perror("asprintf");
+                    continue;
+                }
+
+                nfs_flush_dir(tpath);
+
+                if (http_host) {
+                    (void)http_request(http_host, tpath);
+                }
+
+                free(tpath);
+            }
+        }
+        (void)closedir(odir);
+    }
+
+    return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *watch, *pattern;
+    char *watch, *pattern, *flush;
     struct timeval pretime;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
+    verbose = ev2int(MDSH_VERBOSE); // Global verbosity flag.
 
     (void)strncpy(prog, basename(argv[0]), sizeof(prog));
     prog[sizeof(prog) - 1] = '\0';
@@ -395,6 +590,26 @@ main(int argc, char *argv[])
 
         globfree(&found);
         (void)free(watch);
+    }
+
+    // For every path (file or directory) on this path, nfs-flush it before
+    // running the shell command. The flush is done prior because this is
+    // primarily a "pull" model. That is, before consuming any data which
+    // may have been created on a different host we want to flush the dirty
+    // cache on *that* host. We do not flush after creating new data *here*,
+    // we flush after new data may have been created *there*. Typical example:
+    // a bunch of .o files are compiled in a distributed parallel fashion and
+    // need to be linked on a single host. The *linking* host should flush
+    // *before* invoking the linker. Flush paths might include $^ and $(^D)
+    // but the specifics may vary and may require experimentation.
+    if ((flush = getenv(MDSH_FLUSH_PATHS))) {
+        const char *path;
+
+        insist((flush = strdup(flush)) != NULL, "strdup(flush)");
+        for (path = strtok(flush, SEP); path; path = strtok(NULL, SEP)) {
+            nfs_flush(path);
+        }
+        (void)free(flush);
     }
 
     if (getenv(MDSH_CMDRE)) {
