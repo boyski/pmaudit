@@ -23,11 +23,11 @@ Invoke either with --help for detailed explanation, usage, and examples.
 
 ## The Programs
 
-There are two different tools here which rely on the same basic technique
-while having slightly different features. Either can be used as a shell
-replacement in make though of course the C program will be much faster.
-When used as shell wrappers they dump prerequisite data in GNU make
-format.
+There are two different auditing tools which rely on the same basic
+technique while having slightly different features. Either can be used
+as a shell replacement in make though of course the C program will be
+much faster.  When used as shell wrappers they dump prerequisite data
+in GNU make format.
 
 ### pmaudit
 

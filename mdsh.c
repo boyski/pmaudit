@@ -48,7 +48,8 @@ static int verbose;
 #define MDSH_CMDRE "MDSH_CMDRE"
 #define MDSH_DBGSH "MDSH_DBGSH"
 #define MDSH_EFLAG "MDSH_EFLAG"
-#define MDSH_FLUSH_PATHS "MDSH_FLUSH_PATHS"
+#define MDSH_PRE_FLUSH_PATHS "MDSH_PRE_FLUSH_PATHS"
+#define MDSH_POST_FLUSH_PATHS "MDSH_POST_FLUSH_PATHS"
 #define MDSH_HTTP_SERVER "MDSH_HTTP_SERVER"
 #define MDSH_XTEVS "MDSH_XTEVS"
 #define MDSH_PS1 "MDSH>> "
@@ -114,6 +115,33 @@ analyze the failing state.\n",
 However, be aware that starting an interactive debug shell can\n\
 run into trouble in -j mode which sometimes closes stdin. Such a\n\
 shell requires stdin and stdout to be available to the terminal.\n");
+
+    fprintf(f, "\n\
+MDSH_PRE_FLUSH_PATHS and MDSH_POST_FLUSH_PATHS are colon-separated\n\
+lists of paths on which to attempt NFS cache-flushing before or after\n\
+the recipe runs. The first thing done with each listed path, if it's\n\
+a directory, is to open and close it. This may flush the filehandle\n\
+cache according to http://tss.iki.fi/nfs-coding-howto.html.\n");
+
+    fprintf(f, "\n\
+If MDSH_HTTP_SERVER is passed it should be the name of an HTTP server\n\
+with read access to listed files. A GET request will be issued for each\n\
+path on MDSH_PRE_FLUSH_PATHS whether file or directory. This is said to\n\
+force all dirty NFS caches for that path to be flushed.\n");
+
+    fprintf(f, "\n\
+NFS cache flushing is a very complex topic and the situation varies by\n\
+protocol (NFSv3 vs v4 etc), NFS server vendor, etc. Multiple flushing\n\
+techniques are supported and both 'pull' (flush before reading) and 'push'\n\
+(flush after writing) models are supported to allow experimental tuning.\n");
+
+    fprintf(f, "\n\
+A hypothetical linker recipe could flush the directory containing object\n\
+files to make sure they're all present before it starts linking by\n\
+setting MDSH_PRE_FLUSH_PATHS=$(@D), for instance. Or $^ could be flushed.\n\
+Generally we think pull is more correct than push but having a compile\n\
+recipe, say, use MDSH_POST_FLUSH_PATHS=$@ to push-flush the .o may be\n\
+worth experimenting with too.\n");
 
     fprintf(f, "\n\
 EXAMPLES:\n\n\
@@ -340,7 +368,7 @@ dbgsh(int argc, char *argv[])
  * therefore fulfill the requirements of a "host B" for any "host A".
  */
 static int
-http_request(const char *host, const char *path)
+http_request(const char *server, const char *path)
 {
     struct addrinfo *result, hints;
     struct stat stbuf;
@@ -348,12 +376,16 @@ http_request(const char *host, const char *path)
     char *abspath, *slash, *request;
     char readbuf[1024];
 
+    if (!server) {
+        return 0;
+    }
+
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if ((retval = getaddrinfo(host, "80", &hints, &result))) {
-        fprintf(stderr, "%s: Error: %s: %s\n", prog, host, gai_strerror(retval));
+    if ((retval = getaddrinfo(server, "80", &hints, &result))) {
+        fprintf(stderr, "%s: Error: %s: %s\n", prog, server, gai_strerror(retval));
         return EXIT_FAILURE;
     }
 
@@ -371,7 +403,7 @@ http_request(const char *host, const char *path)
     slash = (!stat(abspath, &stbuf) && S_ISDIR(stbuf.st_mode)) ? "/" : "";
     if (asprintf(&request,
         "GET %s%s HTTP/1.1\nHost: %s\nUser-agent: %s\nRange: bytes=0-%lu\n\n",
-            abspath, slash, host, prog, sizeof(readbuf) - 1) == -1) {
+            abspath, slash, server, prog, sizeof(readbuf) - 1) == -1) {
         perror("asprintf()");
         return EXIT_FAILURE;
     }
@@ -476,46 +508,55 @@ nfs_flush_dir(const char *path)
     return 1;
 }
 
+// NFS-flush each path (file or directory) on the specified path.
 static int
-nfs_flush(const char *fpath)
+nfs_flush(const char *ev)
 {
-    DIR *odir;
-    char *http_host;
+    char *paths;
 
-    nfs_flush_dir(fpath);
+    if ((paths = getenv(ev))) {
+        const char *path;
+        char *http_server;
 
-    http_host = getenv(MDSH_HTTP_SERVER);
+        http_server = getenv(MDSH_HTTP_SERVER);
 
-    if (http_host) {
-        (void)http_request(http_host, fpath);
-    }
+        insist((paths = strdup(paths)) != NULL, "strdup(paths)");
+        for (path = strtok(paths, SEP); path; path = strtok(NULL, SEP)) {
+            DIR *odir;
 
-    /* Flush the immediate subdirs of each dir. */
-    if ((odir = opendir(fpath))) {
-        struct dirent *dp;
-        char *tpath;
+            nfs_flush_dir(path);
 
-        while ((dp = readdir(odir))) {
-            if (!strcmp(dp->d_name, ".git") || !strcmp(dp->d_name, ".svn")) {
-                // Ignore obvious SCM/VCS subdirectories.
-            } else if (dp->d_name[0] == '.') {
-                // Ignore all "dot" files, unlikely to be used in a build.
-            } else if (strcmp(dp->d_name, "..") && strcmp(dp->d_name, ".")) {
-                if (asprintf(&tpath, "%s/%s", fpath, dp->d_name) == -1) {
-                    perror("asprintf");
-                    continue;
+            (void)http_request(http_server, path);
+
+            /* Flush the immediate subdirs of each dir. */
+            if ((odir = opendir(path))) {
+                struct dirent *dp;
+                char *tpath;
+
+                while ((dp = readdir(odir))) {
+                    if (!strcmp(dp->d_name, ".git") || !strcmp(dp->d_name, ".svn")) {
+                        // Ignore obvious SCM/VCS subdirectories.
+                    } else if (dp->d_name[0] == '.') {
+                        // Ignore all "dot" files, unlikely to be used in a build.
+                    } else if (strcmp(dp->d_name, "..") && strcmp(dp->d_name, ".")) {
+                        if (asprintf(&tpath, "%s/%s", path, dp->d_name) == -1) {
+                            perror("asprintf");
+                            continue;
+                        }
+
+                        nfs_flush_dir(tpath);
+
+                        (void)http_request(http_server, tpath);
+
+                        free(tpath);
+                    }
                 }
 
-                nfs_flush_dir(tpath);
-
-                if (http_host) {
-                    (void)http_request(http_host, tpath);
-                }
-
-                free(tpath);
+                (void)closedir(odir);
             }
+
+            (void)free(paths);
         }
-        (void)closedir(odir);
     }
 
     return 0;
@@ -525,7 +566,7 @@ int
 main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
-    char *watch, *pattern, *flush;
+    char *watch, *pattern;
     struct timeval pretime;
 
     argv_ = argv; // Hack to preserve command line for later verbosity.
@@ -541,6 +582,9 @@ main(int argc, char *argv[])
     if (ev2int(MDSH_XTRACE)) {
         xtrace(argc, argv, NULL, NULL);
     }
+
+    // Optionally flush before the recipe.
+    (void)nfs_flush(MDSH_PRE_FLUSH_PATHS);
 
     // Record the state (absence/presence and atime/mtime if present) of files.
     if ((watch = getenv(MDSH_PATHS))) {
@@ -592,26 +636,6 @@ main(int argc, char *argv[])
         (void)free(watch);
     }
 
-    // For every path (file or directory) on this path, nfs-flush it before
-    // running the shell command. The flush is done prior because this is
-    // primarily a "pull" model. That is, before consuming any data which
-    // may have been created on a different host we want to flush the dirty
-    // cache on *that* host. We do not flush after creating new data *here*,
-    // we flush after new data may have been created *there*. Typical example:
-    // a bunch of .o files are compiled in a distributed parallel fashion and
-    // need to be linked on a single host. The *linking* host should flush
-    // *before* invoking the linker. Flush paths might include $^ and $(^D)
-    // but the specifics may vary and may require experimentation.
-    if ((flush = getenv(MDSH_FLUSH_PATHS))) {
-        const char *path;
-
-        insist((flush = strdup(flush)) != NULL, "strdup(flush)");
-        for (path = strtok(flush, SEP); path; path = strtok(NULL, SEP)) {
-            nfs_flush(path);
-        }
-        (void)free(flush);
-    }
-
     if (getenv(MDSH_CMDRE)) {
         size_t i;
         regex_t re;
@@ -645,6 +669,9 @@ main(int argc, char *argv[])
         insist(wait(&status) != -1, "wait()");
         rc = WEXITSTATUS(status);
     }
+
+    // Optionally flush after the recipe.
+    (void)nfs_flush(MDSH_POST_FLUSH_PATHS);
 
     if (ev2int(MDSH_TIMING)) {
         struct timeval endtime;
