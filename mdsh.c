@@ -554,9 +554,9 @@ nfs_flush(const char *ev)
 
                 (void)closedir(odir);
             }
-
-            (void)free(paths);
         }
+
+        (void)free(paths);
     }
 
     return 0;
