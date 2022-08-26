@@ -1,10 +1,10 @@
 # Poor Man's File Auditor[*]
 
-This project comprises two programs which act as build auditors. A build
-auditor is a tool which runs a software build (or really any process
-which reads a set of input files and produces a set of output files)
-and afterward can report which files were which. In other words an audit
-can derive the set of files consumed by the build, the set produced by
+This project comprises two programs which can act as build auditors. A
+build auditor is a tool which runs a software build (or really any process
+that reads a set of input files and produces a set of output files) and
+afterward can report which files were which. In other words a build audit
+can determine the set of files consumed by the build, those produced by
 it, and those ignored by it.
 
 Most build-auditing (aka file auditing) tools are complex and expensive
@@ -15,11 +15,12 @@ end of the spectrum: it's very simple and unambitious, relying only on
 standard Unix filesystem semantics, and with minimal performance cost
 (aside from the loss of parallelism, see below).
 
-One tool (pmaudit) is written in Python, the other (pmash) is a C program
-using similar techniques.  Naturally pmash is much faster but pmaudit is
-more flexible. Either can be used as a shell wrapper. See details below.
+One script (pmaudit) is written in Python, the other (pmash) is a C
+program using similar techniques.  Naturally pmash is much faster but
+pmaudit has more capabilities. Either can be used as a shell wrapper. See
+details below.
 
-Invoke either with --help for detailed explanation, usage, and examples.
+Invoke these with --help for detailed explanation, usage, and examples.
 
 ## The Programs
 
@@ -32,11 +33,10 @@ in GNU make format.
 ### pmaudit
 
 A Python script typically used from the top level of a build. In this mode
-it derives a complete "database" of all files accessed (and not accessed)
-during the build and categorizes them as prerequisites, targets,
-and unused. This database is useful for many things but it does not
-have data with sufficient granularity to tell you which prereqs were
-required by which targets.
+it derives a complete JSON "database" of all files involved in the build
+and categorizes them as prerequisites, targets, and unused. This database
+is useful for many things but it does not have data with sufficient
+granularity to tell you which prereqs were required by which targets.
 
 The pmaudit script can also be used as a shell wrapper to generate
 per-target dependency data in make format. In this mode it's similar
@@ -104,8 +104,8 @@ Here are some concerns I can think of:
 ### Interference From Another Process
 
 If some unrelated process comes over and opens files in the audit area
-during the run the results will of course be contaminated. So don't
-do that. Of course this could be a problem for an unaudited build too.
+during the run the results will of course be contaminated, so don't
+do that. Of course this would be a problem for an unaudited build too.
 
 ### No Support For Parallelism At The Shell Level
 
@@ -125,30 +125,25 @@ it may be helpful to generate/update dependency data in a scheduled
 slightly stale data to do parallel builds. Or use it occasionally to
 find gaps in hardwired data, or to debug a particular build race, etc.
 
-### Permission Problems
-
-Due to the necessity of updating access times (atimes) you may need
-to own the input files. In any build scenario you'd need the right
-to write output files anyway, and of course you'd own those, so this
-basically extends the ownership requirement to prerequisite files.
-
 ### Unseen Files
 
 The script needs to know which files to monitor, and files in an
-unmonitored area will not be recorded. This can be seen as a feature or
-a bug. For instance, when compiling a collection of .c and .h files do
-you want it to record /usr/include/stdio.h as one of the prereqisites
-or is that TMI? Regardless, it will only record accesses to files in
-monitored locations, which can be configured with the --watch option,
-and monitored locations must generally be writable.
+unmonitored area will not be recorded. This can be seen as a feature or a
+bug. For instance, when natively compiling a project of C code do you want
+it to record /usr/include/stdio.h as one of the prereqisites or is that
+TMI? Pmaudit will only record accesses to files in monitored locations,
+which can be configured with the --watch option, and monitored locations
+should generally be writable.
 
 The simplest approach here is to start the build from the base of the
 source tree using the GNU make -C option or equivalent e.g.:
 
-    $ cd sub/dir && pmaudit ... -- make ...       # BAD
-    $ pmaudit ... -- make -C sub/dir ...          # GOOD
+    $ cd sub/dir && pmaudit -- make ...       # BAD
+    $ pmaudit -- make -C sub/dir ...          # GOOD
 
-since the default watch location is the current working directory.
+Since the default watch location is the current working directory, the
+first case will see only files under sub/dir while the second will see all
+files in the source tree.
 
 ### Atimes Not Updated Due to Mount Settings
 
@@ -162,7 +157,7 @@ mount option in modern Linux.
 
 ### Weak Granularity of File Timestamps
 
-Another common issue. Some filesystems still record only seconds
+Another common issue: some filesystems still record only seconds
 or milliseconds and the resulting roundoff errors can lead to bogus
 results. The pmaudit technique works best on high-resolution filesystems
 such as Linux ext4 which records nanoseconds.
@@ -200,20 +195,20 @@ This leaves us with a little JSON database:
 % wc pmaudit.json
   493   980 38058 pmaudit.json
 
-Which we can query to see that there were 115 involved files of which
-56 were prerequisites, 58 intermediates, and 1 final target which is
-of course the executable file "make":
+Which we can query to see that 115 files were involved of which 56 were
+prerequisites, 58 intermediates, and 1 final target which is of course the
+executable file "make":
 
-% pmaudit pmaudit.json -A | wc
+% pmaudit pmaudit.json --all | wc
 115     115    1312
 
-% pmaudit pmaudit.json -P | wc
+% pmaudit pmaudit.json --prerequisites | wc
 56      56     592
 
-% pmaudit pmaudit.json -I | wc
+% pmaudit pmaudit.json --intermediates | wc
 58      58     715
 
-% pmaudit pmaudit.json -F
+% pmaudit pmaudit.json --final
 make
 
 ## Per-Target Auditing
@@ -255,8 +250,8 @@ prereq data to foo.d when building foo.
 The use of .ONESHELL is needed to cause build activity for each target
 to take place in a single shell process. Otherwise, since each recipe
 line is a different shell and they share the same value of $@ the
-output file would be overwritten. Again GNU make is a good example;
-the recipe for each object file looks like this (simplified):
+output file would be overwritten. Again GNU make is a good example.
+Its recipe for each object file looks like this (simplified):
 
     gcc -MT job.o -MD -MP -MF .deps/job.Tpo -c -o job.o job.c
     mv -f .deps/job.Tpo .deps/job.Po
