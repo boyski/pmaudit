@@ -33,6 +33,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifdef __APPLE__
+#define st_atim st_atimespec
+#define st_mtim st_mtimespec
+#endif
+
 #define TMFMT "a1=%010ld.%09ld m1=%010ld.%09ld a2=%010ld.%09ld m2=%010ld.%09ld"
 
 #define NOPENFD 20
@@ -186,7 +191,7 @@ nftw_post_callback(const char *fpath, const struct stat *sb,
 static int
 is_prereq(pathentry_s *p)
 {
-    // If mtime has moved it's a target 
+    // If mtime has moved it's a target
     // and if atime hasn't moved it's unused.
     if (p->times2[1].tv_sec > p->times1[1].tv_sec) {
         return 0;

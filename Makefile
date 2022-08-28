@@ -19,7 +19,7 @@ install: all
 	$(if $(pmash),cp -a pmash $(pmash))
 
 .PHONY: clean
-clean: cleanups := $(wildcard *.o $(TARGETS) src/pmaudit.egg-info dist)
+clean: cleanups := $(wildcard $(TARGETS) *.o *.dSYM src/*.egg-info dist)
 clean:
 	$(if $(cleanups),$(RM) -r $(cleanups))
 
