@@ -1,7 +1,4 @@
-mdsh
 pmash
-foo
-bar
 *.o
 dist
 *.egg-info
