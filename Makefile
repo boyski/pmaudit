@@ -23,8 +23,12 @@ clean:
 package: clean
 	python3 -m build
 
+.PHONY: test-upload
+test-upload: package
+	python3 -m twine upload --repository testpypi dist/*
+
 .PHONY: upload
 upload: package
-	python3 -m twine upload --repository testpypi dist/*
+	python3 -m twine upload dist/*
 
 # vim: filetype=make shiftwidth=2 tw=80 cc=+1 noet

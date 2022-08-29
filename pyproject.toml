@@ -1,10 +1,10 @@
-# "python3 -m build"
+# "Usage: python3 -m build"
 
 [project]
 name = "pmaudit"
-version = "1.0.2"
+version = "1.0"
 authors = [
-  { name="David Boyce", email="github@boyski.com" },
+    { name="David Boyce", email="github@boyski.com" },
 ]
 description = "Poor Man's File Auditor"
 readme = "README.md"
@@ -23,3 +23,5 @@ build-backend = "setuptools.build_meta"
 [project.urls]
 "Homepage" = "https://github.com/boyski/pmaudit"
 "Bug Tracker" = "https://github.com/boyski/pmaudit/issues"
+
+# vim: shiftwidth=4 et
