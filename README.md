@@ -58,11 +58,9 @@ This is a tiny shell wrapper provided to document ways by which either
 tool could be introduced into a GNU make build. It's intended solely as a
 demo of what can be done.
 
-**
-NOTE: the pmaudit Python (PyPI) download does not include pmash.c (because
+*NOTE: the pmaudit Python (PyPI) download does not include pmash.c (because
 it's not part of the Python package) or pmamake (because it's not intended
-for actual use). These may be gotten directly from the git repo.
-**
+for actual use). These may be gotten directly from the git repo.*
 
 ## Uses of Build Auditing
 
