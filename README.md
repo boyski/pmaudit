@@ -58,6 +58,12 @@ This is a tiny shell wrapper provided to document ways by which either
 tool could be introduced into a GNU make build. It's intended solely as a
 demo of what can be done.
 
+**
+NOTE: the pmaudit Python (PyPI) download does not include pmash.c (because
+it's not part of the Python package) or pmamake (because it's not intended
+for actual use). These may be gotten directly from the git repo.
+**
+
 ## Uses of Build Auditing
 
 A few examples of where build auditing could be useful:
@@ -66,7 +72,7 @@ A few examples of where build auditing could be useful:
 
 Say you have a large number of files in your source code repository.
 After many changes and refactorings over the years you no longer know
-which files are still in use. A build audit can tell you this so you
+which files are still needed. A build audit can tell you this so you
 can prune the rest.
 
 ### Streamlined Checkouts
