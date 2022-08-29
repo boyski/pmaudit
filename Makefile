@@ -9,10 +9,6 @@ all: $(TARGETS)
 %: %.c
 	$(CC) -g -o $@ -Wall -Wextra $<
 
-.PHONY: package
-package:
-	python3 -m build
-
 .PHONY: install
 install: pmash := $(shell bash -c "type -fp pmash")
 install: all
@@ -22,5 +18,13 @@ install: all
 clean: cleanups := $(wildcard $(TARGETS) *.o *.dSYM src/*.egg-info dist)
 clean:
 	$(if $(cleanups),$(RM) -r $(cleanups))
+
+.PHONY: package
+package: clean
+	python3 -m build
+
+.PHONY: upload
+upload: package
+	python3 -m twine upload --repository testpypi dist/*
 
 # vim: filetype=make shiftwidth=2 tw=80 cc=+1 noet

@@ -8,12 +8,12 @@ can determine the set of files consumed by the build, those produced by
 it, and those ignored by it.
 
 Most build-auditing (aka file auditing) tools are complex and expensive
-(in both senses of the word). They may involve a custom filesystem
-(such as ClearCase), server processes, or rely on ptrace (essentially
-running audited processes in the debugger).  This system is at the other
-end of the spectrum: it's very simple and unambitious, relying only on
-standard Unix filesystem semantics, and with minimal performance cost
-(aside from the loss of parallelism, see below).
+(in both senses of the word). They may involve a custom filesystem such as
+ClearCase, server processes, or rely on ptrace (essentially running
+audited processes in the debugger).  This system is at the other end of
+the spectrum: it's very simple and unambitious, relying only on standard
+Unix filesystem semantics, and with minimal performance cost (aside from
+the loss of parallelism, see below).
 
 One script (pmaudit) is written in Python, the other (pmash) is a C
 program using similar techniques.  Naturally pmash is much faster but
@@ -25,18 +25,19 @@ Invoke these with --help for detailed explanation, usage, and examples.
 ## The Programs
 
 There are two different auditing tools which rely on the same basic
-technique while having slightly different features. Either can be used
-as a shell replacement in make though of course the C program will be
-much faster.  When used as shell wrappers they dump prerequisite data
-in GNU make format.
+technique while having slightly different features. Either can be used as
+a shell replacement in make though of course the C program will be faster.
+When used as shell wrappers they dump prerequisite data in GNU make
+format.
 
 ### pmaudit
 
-A Python script typically used from the top level of a build. In this mode
-it derives a complete JSON "database" of all files involved in the build
-and categorizes them as prerequisites, targets, and unused. This database
-is useful for many things but it does not have data with sufficient
-granularity to tell you which prereqs were required by which targets.
+This is a Python script typically used from the top level of a build. In
+this mode it derives a complete JSON "database" of all files involved in
+the build and categorizes them as prerequisites, targets, and unused. This
+database is useful for many things but it does not have data with
+sufficient granularity to tell you which prereqs were required by which
+targets.
 
 The pmaudit script can also be used as a shell wrapper to generate
 per-target dependency data in make format. In this mode it's similar
@@ -44,14 +45,18 @@ to pmash but slower.
 
 ### pmash
 
-A C program which operates as a wrapper over the shell. Due to being
-written in C it's much faster than pmaudit but more limited.  It derives
-only per-target prerequisite data and writes it only in make format.
+This is a C program which operates as a wrapper over the shell. Due to
+being written in C it's much faster than pmaudit but has fewer features.
+It derives only per-target prerequisite data and writes it only in make
+format.
+
+Other features of pmaudit could be imported into pmash for speed.
 
 ### pmamake
 
-A tiny shell wrapper provided to document ways by which either tool could
-be introduced into a GNU make build. It's intended solely as a demo.
+This is a tiny shell wrapper provided to document ways by which either
+tool could be introduced into a GNU make build. It's intended solely as a
+demo of what can be done.
 
 ## Uses of Build Auditing
 
@@ -69,17 +74,17 @@ can prune the rest.
 Similar to above: if you know the list of files needed to build project A,
 even if other files must be preserved for building projects B, C, etc, it
 may be helpful to check out only the subset needed by A for bandwidth or
-disk space reasons. Auditing can help you find that subset.
+disk space reasons. Auditing can help you determine that subset.
 
 ### Source Packaging
 
 Imagine you have a proprietary code base and contracts with various
 customers to provide source code for what you sell them. Not every
-customer gets every product: customer A has a contractual right to
-source for products X and Y while customer B gets Y and Z. If the build
-of a product derives the set of files involved in making it as a side
-effect, that list can be used with tar or zip to make up a minimal but
-guaranteed-complete source package.
+customer gets every product: customer A has a contractual right to source
+for products X and Y while customer B gets Y and Z. If the build of each
+product derives the set of files involved as a side effect, that list can
+be used with tar or zip to generate a minimal but guaranteed-complete
+source package.
 
 ### Dependency Analysis
 
@@ -109,12 +114,12 @@ do that. Of course this would be a problem for an unaudited build too.
 
 ### No Support For Parallelism At The Shell Level
 
-Because the "pmash" technique involves sampling the states of files
-before and after, parallel processing could interfere with it. This is
-really just the same as above with the interference coming from within.
-It's not a problem for top-level, black-box auditing since all changes
-are subsumed into one transaction; it's only per-shell or per-target
-pmash-style auditing that has parallelism restrictions.
+Because the "pmash" technique involves sampling the states of files before
+and after the recipe runs, parallel processing could interfere with it.
+This is really just the same as above with the interference coming from
+within.  This is not a problem for top-level, black-box auditing since all
+changes are subsumed into one transaction; it's only per-shell or
+per-target auditing that has parallelism restrictions.
 
 Of course this raises a conundrum; much of the value in having a complete
 dependency graph is that it enables robust parallelism. This tool helps
@@ -131,9 +136,8 @@ The script needs to know which files to monitor, and files in an
 unmonitored area will not be recorded. This can be seen as a feature or a
 bug. For instance, when natively compiling a project of C code do you want
 it to record /usr/include/stdio.h as one of the prereqisites or is that
-TMI? Pmaudit will only record accesses to files in monitored locations,
-which can be configured with the --watch option, and monitored locations
-should generally be writable.
+TMI? Pmaudit will only record accesses to files in monitored locations
+which can be configured with the --watch option.
 
 The simplest approach here is to start the build from the base of the
 source tree using the GNU make -C option or equivalent e.g.:
@@ -147,13 +151,15 @@ files in the source tree.
 
 ### Atimes Not Updated Due to Mount Settings
 
-This is a big one but the tools run a test to detect it. System admins
-may turn off atime updating on NFS as a performance enhancer. This is
-really a system admin issue, not something the script can deal with, so
+This can be a show stopper but the tools run a test to detect it. System
+admins may turn off atime updating on NFS as a performance enhancer. This
+is really a system admin issue, not something the script can deal with, so
 it just dies when atimes aren't behaving. Consider asking system (NFS)
 administrators to use the relatively new "relatime" feature rather than
 turning off atime updates altogether. Fortunately relatime is a default
 mount option in modern Linux.
+
+Local filesystems almost always have atimes enabled.
 
 ### Weak Granularity of File Timestamps
 
@@ -270,6 +276,6 @@ Here we are using pmaudit, which currently provides more options than
 pmash, as the shell wrapper.  We use its --multiline option to more
 accurately reflect how make normally runs commands (normally make runs a
 line at a time and ends the recipe if any of them fail).  We also use
-the --json option which records much more information than --depsfile.
+the --json option which records  more information than --depsfile.
 
 [*] With apologies for the implied classism and sexism :-)
