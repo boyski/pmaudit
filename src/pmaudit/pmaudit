@@ -142,9 +142,6 @@ LB, RB = '{', '}'
 # that it must be >1 second to avoid roundoff errors.
 DELTA = 24 * 60 * 60
 
-# Could use f-strings but it would make 3.5+ a requirement. Maybe someday.
-# pylint: disable=consider-using-f-string
-
 
 # **NOTE** this is a copy from Python2 os.path.walk() since that function
 # has been removed in Python3 in favor of os.walk(). Unfortunately os.walk
@@ -238,7 +235,7 @@ class PMAudit(object):
         for watchdir in self.watchdirs:
             # Figure out how atime updates are handled in this filesystem.
             ref_fname = os.path.join(watchdir,
-                                     '.%s.%d.tmp' % (PROG, os.getpid()))
+                                     f'.{PROG}.{os.getpid()}.tmp')
             with open(ref_fname, mode='w', encoding='utf-8') as f:
                 f.write('data\n')
                 ostats = os.fstat(f.fileno())
@@ -257,7 +254,7 @@ class PMAudit(object):
                 nstats = os.stat(ref_fname)
                 apath = os.path.dirname(os.path.abspath(ref_fname))
                 if nstats.st_atime < nstats.st_mtime:
-                    msg = 'atimes not updated in %s' % apath
+                    msg = f'atimes not updated in {apath}'
                     if not keep_going:
                         die(msg)
                     logging.warning(msg)
@@ -411,11 +408,9 @@ def nfs_flush(priors, host=None):
                          len(apaths), ' '.join(cmd))
         cmd.insert(1, '-oLogLevel=error')
         touches = '\n'.join(apaths) + '\n'
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        proc.stdin.write(touches.encode('utf-8'))
-        proc.stdin.close()
-        if proc.wait():
-            sys.exit(2)
+        with subprocess.Popen(cmd, stdin=subprocess.PIPE) as proc:
+            proc.stdin.write(touches.encode('utf-8'))
+            proc.stdin.close()
     else:
         for path in sorted(priors):
             with open(path, encoding='utf-8') as f:
@@ -554,7 +549,7 @@ def main():
         else:
             cmdstr = unparsed.pop(0)
             if unparsed:
-                die('unparsed options: %s' % unparsed)
+                die(f'unparsed options: {unparsed}')
             cmd = [opts.shell]
             if opts.e:
                 cmd.append('-e')
@@ -569,7 +564,7 @@ def main():
             cmd_text = cmdstr
 
         if not opts.json and not opts.depsfile:  # Implement default save.
-            opts.json = '%s.json' % PROG
+            opts.json = f'{PROG}.json'
 
         wdirs = []
         if opts.watch:
@@ -601,9 +596,9 @@ def main():
                 f.write(os.path.splitext(opts.depsfile)[0] + ': \\\n')
                 for i, prq in enumerate(prqs):
                     eol = ' \\\n' if i < len(prqs) - 1 else '\n'
-                    f.write('  %s%s' % (prq, eol))
+                    f.write(f'  {prq}{eol}')
                 for prq in prqs:
-                    f.write('\n%s:\n' % prq)
+                    f.write(f'\n{prq}:\n')
         if opts.json:
             generate_json(adb, opts.json)
         sys.exit(2 if rc else 0)
@@ -612,7 +607,7 @@ def main():
     # In this mode we are not a wrapper so can reparse the
     # command line more strictly.
     parser.add_argument(
-        'dbfile', default='%s.json' % PROG, nargs='?',
+        'dbfile', default=f'{PROG}.json', nargs='?',
         metavar='FILE',
         help="query audit data from FILE (default=%(default)s)")
     opts = parser.parse_args()
