@@ -7,7 +7,7 @@ TARGETS := pmash
 all: $(TARGETS)
 
 %: %.c
-	$(CC) -g -o $@ -Wall -Wextra $<
+	$(CC) -o $@ -Wall -Wextra $<
 
 .PHONY: install
 install: pmash := $(shell bash -c "type -fp pmash")

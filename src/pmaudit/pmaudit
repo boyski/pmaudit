@@ -136,9 +136,14 @@ UNUSED = 'unused'
 DB = 'db'
 CUSTOM = 'custom'
 
+LB, RB = '{', '}'
+
 # I don't think the mtime - atime delta matters except
 # that it must be >1 second to avoid roundoff errors.
 DELTA = 24 * 60 * 60
+
+# Could use f-strings but it would make 3.5+ a requirement. Maybe someday.
+# pylint: disable=consider-using-f-string
 
 
 # **NOTE** this is a copy from Python2 os.path.walk() since that function
@@ -234,11 +239,11 @@ class PMAudit(object):
             # Figure out how atime updates are handled in this filesystem.
             ref_fname = os.path.join(watchdir,
                                      '.%s.%d.tmp' % (PROG, os.getpid()))
-            with open(ref_fname, 'w') as f:
+            with open(ref_fname, mode='w', encoding='utf-8') as f:
                 f.write('data\n')
                 ostats = os.fstat(f.fileno())
             os.utime(ref_fname, (ostats.st_mtime - DELTA, ostats.st_mtime))
-            with open(ref_fname) as f:
+            with open(ref_fname, encoding='utf-8') as f:
                 f.read()
             nstats = os.stat(ref_fname)
             needflush = nstats.st_atime < nstats.st_mtime
@@ -247,7 +252,7 @@ class PMAudit(object):
                                        'mtime': nstats.st_mtime,
                                        'size': nstats.st_size,
                                        'needflush': True}}, host=flush_host)
-                with open(ref_fname) as f:
+                with open(ref_fname, encoding='utf-8') as f:
                     f.read()
                 nstats = os.stat(ref_fname)
                 apath = os.path.dirname(os.path.abspath(ref_fname))
@@ -413,7 +418,7 @@ def nfs_flush(priors, host=None):
             sys.exit(2)
     else:
         for path in sorted(priors):
-            with open(path) as f:
+            with open(path, encoding='utf-8') as f:
                 fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
                 fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
 
@@ -423,8 +428,8 @@ def my_json_dump(data, open_file, current=0, indent=2):
     # Unfortunately json.dump() provides very little formatting control,
     # so we'll just re-implement what we need.
     # We assume starting indentation (if needed) has already occurred.
-    if isinstance(data, dict) and data and 'atime' not in data:
-        open_file.write('{\n')
+    if data and isinstance(data, dict) and 'atime' not in data:
+        open_file.write(LB + '\n')
         new_indent = current + indent
         indent_text = new_indent * ' '
         first = True
@@ -438,9 +443,9 @@ def my_json_dump(data, open_file, current=0, indent=2):
             first = False
         open_file.write('\n')  # End last line
         open_file.write(current * ' ')
-        open_file.write('}')
-    # Lists don't include long dictionaries, so re-implementation not needed.
-    # Instead, everything *but* hashes are forced onto a single line.
+        open_file.write(RB)
+        # Lists have no long dictionaries so re-implementation isn't needed.
+        # Instead, everything *but* dicts are forced onto a single line.
     else:
         json.dump(data, open_file)
 
@@ -448,7 +453,7 @@ def my_json_dump(data, open_file, current=0, indent=2):
 def generate_json(data, filename):
     """Generate and store JSON data with control over formatting."""
     mkdir_p(os.path.dirname(filename))
-    with open(filename, 'w') as f:
+    with open(filename, mode='w', encoding='utf-8') as f:
         # We don't use "json.dump(data, f, indent=2)" because that produces
         # many multi-line lists.
         my_json_dump(data, f)
@@ -592,7 +597,7 @@ def main():
             prqs = adb[DB][PREREQS]
             # *Always* create depsfile, even if prqs is empty.
             mkdir_p(os.path.dirname(opts.depsfile))
-            with open(opts.depsfile, 'w') as f:
+            with open(opts.depsfile, mode='w', encoding='utf-8') as f:
                 f.write(os.path.splitext(opts.depsfile)[0] + ': \\\n')
                 for i, prq in enumerate(prqs):
                     eol = ' \\\n' if i < len(prqs) - 1 else '\n'
@@ -612,7 +617,7 @@ def main():
         help="query audit data from FILE (default=%(default)s)")
     opts = parser.parse_args()
 
-    with open(opts.dbfile, 'r') as f:
+    with open(opts.dbfile, encoding='utf-8') as f:
         root = json.load(f)
     db = root[DB]
 
@@ -650,4 +655,11 @@ if __name__ == '__main__':
         if 'Broken pipe' not in e.strerror:
             raise
 
-# vim: filetype=python:et:ts=8:sw=4:tw=80
+# Local Variables:
+# mode: Python
+# indent-tabs-mode: nil
+# python-indent: 4
+# fill-column: 80
+# End:
+#
+# vim: sw=4:et:tw=80:cc=+1
