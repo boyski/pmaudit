@@ -2,3 +2,4 @@ pmash
 *.o
 dist
 *.egg-info
+*.swp

@@ -1,1 +1,3 @@
 include src/pmaudit/pmaudit
+include src/pmaudit/pmauditor.py
+include src/pmaudit/sys.pth

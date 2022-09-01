@@ -15,7 +15,7 @@ targets, modified sources, final targets, and unused:
   this will be a source file originally checked out from SCM.
 
   2. An intermediate target is one that was opened for both write and read
-  (in that order). The most common example would be a .o file created
+  (in that order). The most common example would be a .o file written
   by the compiler and later read by the linker.
 
   3. A file opened for both read and write in the other order (read before
@@ -24,8 +24,8 @@ targets, modified sources, final targets, and unused:
 
   4. A final target is a file which was opened only for write.
   Typically it's one of the final, deliverable build artifacts, the
-  thing you set out to build. An example would be an executable file
-  created by the linker.
+  thing you set out to build. The classic example would be an executable
+  file created by the linker.
 
   5. An unused file, naturally, is one not opened at all during the build.
 
@@ -34,17 +34,17 @@ HOW IT WORKS:
 This is the simplest form of file access auditing and could almost be
 done by hand without scripting. It relies only on standard Unix file
 access (atime) and modification (mtime) semantics. Before running
-the audited command, the timestamps of all existing files in the
+the audited command the timestamps of all existing files in the
 audited directory tree are normalized and recorded.  Then, as soon as
 the command finishes, the same set of files is rechecked.  If a file
-existed before the audit and neither atime nor mtime has moved after,
-it was clearly unused.  If only the atime has advanced it's a prereq. If
+existed before the audit and neither atime nor mtime has moved,
+clearly it was unused.  If only the atime has advanced it's a prereq. If
 it came into existence during the audit it's a target, and if atime >
 mtime it's an intermediate target.  Etc.
 
 A nice benefit of this simplicity is that there's practically no
 performance cost. Most build-auditing techniques rely on a special
-filesystem or ptrace which can slow things down measurably. This approach
+filesystem or ptrace which can slow things down measurably. This method
 has no effect on the running build; the only cost is that of traversing
 and stat-ing every file in the audited directory before and after.
 
@@ -62,12 +62,12 @@ in NFS less common, which is a big help, and relatime is becoming the
 default NFS mount option.
 
 If the underlying filesystem doesn't support sufficient timestamp
-precision, results may be iffy. Clearly, when atimes and mtimes are
-recorded only as seconds all files touched within the same second will
+precision, results may be iffy. Clearly, if atimes and mtimes were
+recorded only as seconds all files touched within the same second would
 have the same timestamp and confusion may occur. Thus this is best used on
-a modern Linux filesystem which records nanoseconds or similar.  It's not
-that nanosecond precision per se is required, just that the more precision
-the better.
+a modern filesystem which records nanoseconds or similar.  It's not that
+nanosecond precision per se is required, just that the more precision the
+better.
 
 As with any file-auditing technology this might expose underlying
 weaknesses in the build model. I.e. if a file shows up in the wrong
@@ -77,7 +77,7 @@ EXAMPLES:
 
 Run an audited make command and leave the results in %(prog)s.json:
 
-    make -C subdir clean; %(prog)s --json %(prog)s.json -- make -C subdir ...
+    make -C subdir clean; %(prog)s -- make -C subdir ...
 
 Dump the prerequisite set derived by the audit above:
 
@@ -89,7 +89,7 @@ Dump the discovered targets, both intermediate and final:
 """
 
 ###############################################################################
-# Copyright (C) 2010-2018 David Boyce
+# Copyright (C) 2010-2022 David Boyce
 #
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -105,365 +105,66 @@ Dump the discovered targets, both intermediate and final:
 ###############################################################################
 
 import argparse
-import collections
-import datetime
-import fcntl
 import json
 import logging
 import os
-import socket
-import stat
 import subprocess
 import sys
-import time
+
+import pmauditor
 
 PROG = os.path.basename(__file__)
 
-FMT1 = '%.07f'  # Format for one time value
-
-HOSTNAME = 'hostname'
-BASE = 'base'
-CMD = 'cmd'
-FINAL_CMD = 'final_cmd'
-START_TIME = 'start_time'
-END_TIME = 'end_time'
-PRIOR_COUNT = 'prior_count'
-AFTER_COUNT = 'after_count'
-PREREQS = 'prereqs'
-INTERMEDIATES = 'intermediates'
-FINALS = 'finals'
-UNUSED = 'unused'
-DB = 'db'
 CUSTOM = 'custom'
-
 LB, RB = '{', '}'
 
-# I don't think the mtime - atime delta matters except
-# that it must be >1 second to avoid roundoff errors.
-DELTA = 24 * 60 * 60
 
-
-# **NOTE** this is a copy from Python2 os.path.walk() since that function
-# has been removed in Python3 in favor of os.walk(). Unfortunately os.walk
-# tends to update symlink atimes so we can't use it.
-def os_path_walk(top, func, arg):
-    """Directory tree walk with callback function.
-
-    For each directory in the directory tree rooted at top (including top
-    itself, but excluding '.' and '..'), call func(arg, dirname, fnames).
-    dirname is the name of the directory, and fnames a list of the names of
-    the files and subdirectories in dirname (excluding '.' and '..').  func
-    may modify the fnames list in-place (e.g. via del or slice assignment),
-    and walk will only recurse into the subdirectories whose names remain in
-    fnames; this can be used to implement a filter, or to impose a specific
-    order of visiting.  No semantics are defined for, or required of, arg,
-    beyond that arg is always passed to func.  It can be used, e.g., to pass
-    a filename pattern, or a mutable object designed to accumulate
-    statistics.  Passing None for arg is common."""
-
-    try:
-        names = os.listdir(top)
-    except OSError:
-        return
-    func(arg, top, names)
-    for name in names:
-        name = os.path.join(top, name)
-        try:
-            st = os.lstat(name)
-        except OSError:
-            continue
-        if stat.S_ISDIR(st.st_mode):
-            os_path_walk(name, func, arg)
-
-
-def die(message):
-    """Report failure message and exit program with failure."""
-    logging.error(message)
-    sys.exit(1)
-
-
-def mkdir_p(new_dir):
-    """Make a directory sequence if it doesn't exist already."""
-    if not new_dir:
-        return  # Presume empty/current directory exists.
-    # This raises an exception if can't create (e.g., if it's a file):
-    os.makedirs(new_dir, exist_ok=True)
-
-
-def time_details(reftime):
-    """Turn reftime into time information for JSON file."""
-    dt = datetime.datetime.utcfromtimestamp(reftime)
-    refstr = dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-    return [refstr, FMT1 % reftime]
-
-
-class PMAudit(object):
-
-    """Track files used (prereqs) and generated (targets)."""
-
-    def __init__(self, watchdirs, exclude=None):
-        self.watchdirs = watchdirs
-        self.exclude = set(['.git', '.svn'])
-        if exclude:
-            self.exclude |= exclude
-        self.prereqs = collections.OrderedDict()
-        self.intermediates = collections.OrderedDict()
-        self.finals = collections.OrderedDict()
-        self.unused = collections.OrderedDict()
-        self.reftime = None
-        self.endtime = None
-        self.prior = {}
-
-    def start(self, flush_host=None, keep_going=False):
-        """
-        Start the build audit.
-
-        There are some builds which touch their prerequisites,
-        causing them to look like targets. To protect against
-        that we use the belt-and-suspenders approach of checking
-        against a list of files which predated the build.
-
-        Also, due to the introduction of the Linux 'relatime' option
-        it's necessary to prime the atime pump before starting. This
-        is done by making all atimes a bit earlier than their mtimes.
-        """
-
-        mkflags = os.getenv('MAKEFLAGS')
-        if mkflags and ' -j' in mkflags:
-            die('not supported in -j mode')
-
-        for watchdir in self.watchdirs:
-            # Figure out how atime updates are handled in this filesystem.
-            ref_fname = os.path.join(watchdir,
-                                     f'.{PROG}.{os.getpid()}.tmp')
-            with open(ref_fname, mode='w', encoding='utf-8') as f:
-                f.write('data\n')
-                ostats = os.fstat(f.fileno())
-            os.utime(ref_fname, (ostats.st_mtime - DELTA, ostats.st_mtime))
-            with open(ref_fname, encoding='utf-8') as f:
-                f.read()
-            nstats = os.stat(ref_fname)
-            needflush = nstats.st_atime < nstats.st_mtime
-            if needflush:
-                nfs_flush({ref_fname: {'atime': nstats.st_atime,
-                                       'mtime': nstats.st_mtime,
-                                       'size': nstats.st_size,
-                                       'needflush': True}}, host=flush_host)
-                with open(ref_fname, encoding='utf-8') as f:
-                    f.read()
-                nstats = os.stat(ref_fname)
-                apath = os.path.dirname(os.path.abspath(ref_fname))
-                if nstats.st_atime < nstats.st_mtime:
-                    msg = f'atimes not updated in {apath}'
-                    if not keep_going:
-                        die(msg)
-                    logging.warning(msg)
-                else:
-                    logging.info('NFS flush required in %s', apath)
-            os.remove(ref_fname)
-
-            for parent, dnames, fnames in os.walk(watchdir):
-                dnames[:] = (dn for dn in dnames if dn not in self.exclude)
-                for fname in fnames:
-                    if fname in self.exclude:
-                        continue
-                    path = os.path.relpath(os.path.join(parent, fname))
-                    if os.path.islink(path):
-                        continue
-                    # Modern Linux won't update atime unless it's
-                    # older than mtime (the "relatime" feature).
-                    stats = os.stat(path)
-                    atime, mtime = (stats.st_atime, stats.st_mtime)
-                    if atime >= mtime:
-                        atime = mtime - DELTA
-                        os.utime(path, (atime, mtime))
-                    self.prior[path] = {'atime': atime,
-                                        'mtime': mtime,
-                                        'size': stats.st_size,
-                                        'needflush': needflush}
-
-        nfs_flush(self.prior, host=flush_host)
-
-        self.reftime = time.time()
-
-    def finish(self, cmd=None, final_cmd=None):
-        """End the audit, return the result."""
-
-        # Record the set of surviving files with their times,
-        # dividing them into the standard categories.
-        # For each recorded file 4 timestamps are kept:
-        # "pre-atime,pre-mtime,post-atime,post-mtime".
-        # This data isn't needed once files have been categorized
-        # but may be helpful in analysis or debugging.
-        # Note: we can't use os.walk() for this because it has a
-        # way of updating symlink atimes.
-        prereqs, intermediates, finals, unused = {}, {}, {}, {}
-
-        def visit(prunedirs, parent, fnames):
-            """Callback function for os_path_walk() to categorize files."""
-            for prunedir in prunedirs:
-                if parent.startswith(prunedir):
-                    return
-            if os.path.basename(parent) in self.exclude:
-                prunedirs.add(parent + os.sep)
-                return
-            for fname in fnames:
-                if fname in self.exclude:
-                    continue
-                path = os.path.relpath(os.path.join(parent, fname))
-                if os.path.isdir(path):
-                    continue
-                stats = os.lstat(path)
-                atime, mtime = stats.st_atime, stats.st_mtime
-                pstate = self.prior.get(path)
-                if pstate:
-                    if atime > pstate['atime']:
-                        val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
-                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime],
-                               'size': [pstate['size'], stats.st_size]}
-                        if mtime > pstate['mtime']:
-                            if mtime > atime:
-                                finals[path] = val
-                                msg = 'pre-existing file is final'
-                            else:
-                                intermediates[path] = val
-                                msg = 'pre-existing file is target'
-                            logging.info('%s: %s', msg, path)
-                        else:
-                            prereqs[path] = val
-                    elif mtime > pstate['mtime']:
-                        val = {'atime': [FMT1 % pstate['atime'], FMT1 % atime],
-                               'mtime': [FMT1 % pstate['mtime'], FMT1 % mtime],
-                               'size': [pstate['size'], stats.st_size]}
-                        finals[path] = val
-                        logging.info('pre-existing file modified: %s', path)
-                    else:
-                        val = {'atime': [FMT1 % pstate['atime'], '0'],
-                               'mtime': [FMT1 % pstate['mtime'], '0'],
-                               'size': [pstate['size'], pstate['size']]}
-                        unused[path] = val
-                        continue
-                else:
-                    val = {'atime': ['-2', FMT1 % atime],
-                           'mtime': ['-1', FMT1 % mtime],
-                           'size': [None, stats.st_size]}
-                    if mtime < atime:
-                        intermediates[path] = val
-                    else:
-                        finals[path] = val
-
-        for watchdir in self.watchdirs:
-            os_path_walk(watchdir, visit, set())  # pylint: disable=no-member
-
-        # Sort the data just derived. Not needed but helps readability.
-        for k in sorted(prereqs):
-            self.prereqs[k] = prereqs[k]
-        for k in sorted(intermediates):
-            self.intermediates[k] = intermediates[k]
-        for k in sorted(finals):
-            self.finals[k] = finals[k]
-        for k in sorted(unused):
-            self.unused[k] = unused[k]
-
-        # Build up and return a serializable database.
-        root = collections.OrderedDict()
-        root[HOSTNAME] = socket.gethostname()
-        root[BASE] = os.getcwd()
-        root[CMD] = str(cmd)
-        root[FINAL_CMD] = final_cmd
-        root[START_TIME] = time_details(self.reftime)
-        root[PRIOR_COUNT] = str(len(self.prior))
-        after_count = len(self.prereqs) + len(self.intermediates) + \
-            len(self.finals) + len(self.unused)
-        root[AFTER_COUNT] = str(after_count)
-        root[DB] = collections.OrderedDict()
-        root[DB][PREREQS] = self.prereqs
-        root[DB][INTERMEDIATES] = self.intermediates
-        root[DB][FINALS] = self.finals
-        root[DB][UNUSED] = self.unused
-
-        self.endtime = time.time()
-        root[END_TIME] = time_details(self.endtime)
-
-        return root
-
-
-def cfglog(bump):
-    """Configure logging."""
-    logging.basicConfig(
-        format=PROG + ': %(levelname)s: %(message)s',
-        level=max(logging.DEBUG, logging.WARNING - (logging.DEBUG * bump)))
-
-
-def nfs_flush(priors, host=None):
-    """Do whatever it takes to force NFS flushing of metadata."""
-    apaths = sorted([os.path.abspath(p)
-                     for p in priors if priors[p]['needflush']])
-    if host and apaths:
-        oldest = int(min((priors[k]['mtime'] for k in priors)))
-        cmd = ['ssh', host, '--', 'xargs', 'touch', '-a', '-t']
-        cmd.append(time.strftime('%Y%m%d%H%M', time.localtime(oldest - DELTA)))
-        if len(apaths) > 1:
-            logging.info('flushing %d files with "%s"',
-                         len(apaths), ' '.join(cmd))
-        cmd.insert(1, '-oLogLevel=error')
-        touches = '\n'.join(apaths) + '\n'
-        with subprocess.Popen(cmd, stdin=subprocess.PIPE) as proc:
-            proc.stdin.write(touches.encode('utf-8'))
-            proc.stdin.close()
-    else:
-        for path in sorted(priors):
-            with open(path, encoding='utf-8') as f:
-                fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
-                fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
-
-
-def my_json_dump(data, open_file, current=0, indent=2):
-    """Perform json.dump but display each list as a single line."""
-    # Unfortunately json.dump() provides very little formatting control,
-    # so we'll just re-implement what we need.
-    # We assume starting indentation (if needed) has already occurred.
-    if data and isinstance(data, dict) and 'atime' not in data:
-        open_file.write(LB + '\n')
-        new_indent = current + indent
-        indent_text = new_indent * ' '
-        first = True
-        for key in data:
-            if not first:  # Add separator (comma) and new line
-                open_file.write(',\n')
-            open_file.write(indent_text)
-            open_file.write(json.dumps(key))
-            open_file.write(': ')
-            my_json_dump(data[key], open_file, new_indent, indent)
-            first = False
-        open_file.write('\n')  # End last line
-        open_file.write(current * ' ')
-        open_file.write(RB)
-        # Lists have no long dictionaries so re-implementation isn't needed.
-        # Instead, everything *but* dicts are forced onto a single line.
-    else:
-        json.dump(data, open_file)
-
-
-def generate_json(data, filename):
+def dump_json(data, filename):
     """Generate and store JSON data with control over formatting."""
-    mkdir_p(os.path.dirname(filename))
+
+    def json_dump_flat(data, open_file, current=0, indent=2):
+        """Perform json.dump but display each list as a single line."""
+        # Unfortunately json.dump() provides very little formatting control
+        # so we'll just re-implement what we need.
+        # We assume starting indentation (if needed) has already occurred.
+        if data and isinstance(data, dict) and 'atime' not in data:
+            open_file.write(LB + '\n')
+            new_indent = current + indent
+            indent_text = new_indent * ' '
+            first = True
+            for key in data:
+                if not first:  # Add separator (comma) and new line
+                    open_file.write(',\n')
+                open_file.write(indent_text)
+                open_file.write(json.dumps(key))
+                open_file.write(': ')
+                json_dump_flat(data[key], open_file, new_indent, indent)
+                first = False
+            open_file.write('\n')  # End last line
+            open_file.write(current * ' ')
+            open_file.write(RB)
+            # Lists have no long dicts so re-implementation isn't needed.
+            # Instead, everything *but* dicts are forced onto a single line.
+        else:
+            json.dump(data, open_file)
+
+    os.makedirs(os.path.dirname(filename) or os.curdir, exist_ok=True)
     with open(filename, mode='w', encoding='utf-8') as f:
-        # We don't use "json.dump(data, f, indent=2)" because that produces
+        # We don't use json.dump() directly because it produces
         # many multi-line lists.
-        my_json_dump(data, f)
+        json_dump_flat(data, f)
         f.write('\n')
 
 
-def custom_results(custom_list):
-    """Convert custom_list, a list of key=value pairs, into a dictionary."""
+def custom_results(entries):
+    """Convert a list of key=value pairs into a dictionary."""
     result = {}
-    if custom_list:
-        for entry in custom_list:
+    if entries:
+        for entry in entries:
             if '=' in entry:
                 key, value = entry.split('=', maxsplit=1)
                 result[key] = value
-            else:  # If no value is given, use true as the value.
+            else:  # if no value is given, treat it as a boolean.
                 result[entry] = True
     return result
 
@@ -537,7 +238,12 @@ def main():
         help="space-separated flags to pass to shell (default=%(default)s)")
 
     opts, unparsed = parser.parse_known_args()
-    cfglog(opts.verbosity)
+
+    # Configure logging.
+    logging.basicConfig(
+        format=PROG + ': %(levelname)s: %(message)s',
+        level=max(logging.DEBUG, logging.WARNING - (
+            logging.DEBUG * opts.verbosity)))
 
     if '--' in sys.argv or opts.c:
         if '--' in sys.argv:
@@ -549,7 +255,7 @@ def main():
         else:
             cmdstr = unparsed.pop(0)
             if unparsed:
-                die(f'unparsed options: {unparsed}')
+                raise RuntimeError(f'unparsed options: {unparsed}')
             cmd = [opts.shell]
             if opts.e:
                 cmd.append('-e')
@@ -577,7 +283,7 @@ def main():
             exclude_set.add(opts.json)
         if opts.depsfile:
             exclude_set.add(opts.depsfile)
-        audit = PMAudit(wdirs, exclude=exclude_set)
+        audit = pmauditor.Audit(wdirs, exclude=exclude_set)
         audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
         for cmd in cmds:  # Execute each line in sequence.
             rc = subprocess.call(cmd)
@@ -589,9 +295,9 @@ def main():
         adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
         adb[CUSTOM] = custom_results(opts.custom)
         if opts.depsfile:
-            prqs = adb[DB][PREREQS]
+            prqs = adb[pmauditor.DB][pmauditor.PREREQS]
             # *Always* create depsfile, even if prqs is empty.
-            mkdir_p(os.path.dirname(opts.depsfile))
+            os.makedirs(os.path.dirname(opts.depsfile), exist_ok=True)
             with open(opts.depsfile, mode='w', encoding='utf-8') as f:
                 f.write(os.path.splitext(opts.depsfile)[0] + ': \\\n')
                 for i, prq in enumerate(prqs):
@@ -600,7 +306,7 @@ def main():
                 for prq in prqs:
                     f.write(f'\n{prq}:\n')
         if opts.json:
-            generate_json(adb, opts.json)
+            dump_json(adb, opts.json)
         sys.exit(2 if rc else 0)
 
     # Don't analyze, e.g., report from an existing audit log.
@@ -614,7 +320,7 @@ def main():
 
     with open(opts.dbfile, encoding='utf-8') as f:
         root = json.load(f)
-    db = root[DB]
+    db = root[pmauditor.DB]
 
     if opts.all_involved:
         opts.prerequisites = opts.intermediates = opts.final_targets = True
@@ -624,13 +330,13 @@ def main():
     results = {}
 
     if opts.intermediates:
-        results.update(db[INTERMEDIATES])
+        results.update(db[pmauditor.INTERMEDIATES])
     if opts.prerequisites:
-        results.update(db[PREREQS])
+        results.update(db[pmauditor.PREREQS])
     if opts.final_targets:
-        results.update(db[FINALS])
+        results.update(db[pmauditor.FINALS])
     if opts.unused:
-        results.update(db[UNUSED])
+        results.update(db[pmauditor.UNUSED])
 
     def by_atime(item):
         """Sort by post-atime."""
