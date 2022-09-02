@@ -1,5 +1,6 @@
-pmash
-*.o
 dist
+pmash
 *.egg-info
+*.json
+*.o
 *.swp
