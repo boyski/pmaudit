@@ -15,7 +15,7 @@ install: all
 	$(if $(pmash),cp -a pmash $(pmash))
 
 .PHONY: clean
-clean: cleanups := $(wildcard $(TARGETS) *.o *.dSYM src/*.egg-info dist)
+clean: cleanups := $(wildcard $(TARGETS) *.o *.json *.dSYM dist src/*.egg-info)
 clean:
 	$(if $(cleanups),$(RM) -r $(cleanups))
 
