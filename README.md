@@ -33,7 +33,7 @@ format.
 ### pmaudit
 
 This is a Python script typically used from the top level of a build. In
-this mode it derives a complete JSON "database" of all files involved in
+this mode it derives a complete JSON database of all files involved in
 the build and categorizes them as prerequisites, targets, and unused. This
 database is useful for many things but it does not have data with
 sufficient granularity to tell you which prereqs were required by which
@@ -167,10 +167,10 @@ Local filesystems almost always have atimes enabled.
 
 ### Weak Granularity of File Timestamps
 
-Another common issue: some filesystems still record only seconds
-or milliseconds and the resulting roundoff errors can lead to bogus
-results. The pmaudit technique works best on high-resolution filesystems
-such as Linux ext4 which records nanoseconds.
+Another issue: some filesystems still record only seconds or milliseconds
+and the resulting roundoff errors can lead to bogus results. The pmaudit
+technique works best on high-resolution filesystems such as Linux ext4
+which records nanoseconds.
 
 ### Difference From Traditional Dependency Generation
 
@@ -196,7 +196,7 @@ its state is fresh.
 
 ## Black Box Auditing
 
-A complete black-box audit from the top:
+A complete black-box audit of the build of GNU make from the top:
 
 % pmaudit --json pmaudit.json -- make > /dev/null
 
@@ -209,16 +209,16 @@ Which we can query to see that 115 files were involved of which 56 were
 prerequisites, 58 intermediates, and 1 final target which is of course the
 executable file "make":
 
-% pmaudit pmaudit.json --all | wc
+% pmaudit pmaudit.json -A | wc
 115     115    1312
 
-% pmaudit pmaudit.json --prerequisites | wc
+% pmaudit pmaudit.json -P | wc
 56      56     592
 
-% pmaudit pmaudit.json --intermediates | wc
+% pmaudit pmaudit.json -I | wc
 58      58     715
 
-% pmaudit pmaudit.json --final
+% pmaudit pmaudit.json -F
 make
 
 ## Per-Target Auditing
