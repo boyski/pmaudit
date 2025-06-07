@@ -129,12 +129,9 @@ import time
 
 PROG = op.basename(__file__)
 
-CUSTOM = 'custom'
-LB, RB = '{', '}'
+UTF8 = 'utf-8'
 
-ATIME = 'atime'
-MTIME = 'mtime'
-SIZE = 'size'
+LB, RB = '{', '}'
 
 HOSTNAME = 'hostname'
 BASE = 'base'
@@ -155,7 +152,7 @@ JSON = 'pmaudit.json'
 # The (mtime - atime) delta probably doesn't matter except
 # that it must be >1 second to avoid roundoff errors.
 NANOS = 10 ** 9
-DELTA = 24 * 60 * 60 * NANOS
+ATIME_DELTA = 24 * 60 * 60 * NANOS
 
 
 def time_details(reftime):
@@ -165,32 +162,161 @@ def time_details(reftime):
     return [refstr, reftime]
 
 
-def nfs_flush(priors, host=None):
-    """Do whatever it takes to force NFS flushing of metadata."""
-    apaths = sorted([op.abspath(p) for p in priors if priors[p]['needflush']])
-    if host and apaths:
-        oldest = int(min((priors[k][MTIME] for k in priors)))
-        cmd = ['ssh', host, '--', 'xargs', 'touch', '-a', '-t']
-        cmd.append(time.strftime('%Y%m%d%H%M', time.localtime(oldest - DELTA)))
-        if len(apaths) > 1:
-            logging.info('flushing %d files with "%s"',
-                         len(apaths), ' '.join(cmd))
-        cmd.insert(1, '-oLogLevel=error')
-        touches = '\n'.join(apaths) + '\n'
-        with subprocess.Popen(cmd, stdin=subprocess.PIPE) as proc:
-            proc.stdin.write(touches.encode('utf-8'))
-            proc.stdin.close()
-    else:
-        for path in sorted(priors):
-            with open(path, encoding='utf-8') as f:
-                fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
-                fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
+def nfs_flush(path):
+    """Do whatever it takes to force NFS flushing of metadata if needed."""
+    with open(path, encoding=UTF8) as f:
+        fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
+        fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
+
+
+class WatchDir():
+    """Wrap over dirs and remember whether they need nfs-flushing."""
+
+    def __init__(self, path):
+        self.path = path
+        self.needflush = self.test_fs()
+
+    def __str__(self):
+        return self.path
+
+    def __repr__(self):
+        return str(self)
+
+    def test_fs(self):
+        """Determine how atime updates are handled in this filesystem."""
+        testfile = op.join(
+            self.path, f'.{op.basename(__file__)}.{os.getpid()}.tmp')
+
+        with open(testfile, mode='w', encoding=UTF8) as f:
+            f.write('random data\n')
+            ostats = os.fstat(f.fileno())
+        os.utime(testfile, ns=(ostats.st_mtime_ns - ATIME_DELTA,
+                               ostats.st_mtime_ns))
+        with open(testfile, encoding=UTF8) as f:
+            f.read()
+        nstats = os.stat(testfile)
+        needflush = nstats.st_atime_ns < nstats.st_mtime_ns
+        if needflush:
+            nfs_flush(testfile)
+            with open(testfile, encoding=UTF8) as f:
+                f.read()
+            nstats = os.stat(testfile)
+            absdir = op.dirname(op.abspath(testfile))
+            if nstats.st_atime_ns < nstats.st_mtime_ns:
+                msg = f'atimes not updated in {absdir}'
+                logging.warning(msg)
+            else:
+                logging.info('NFS flush required in %s', absdir)
+        os.remove(testfile)
+        return needflush
+
+
+class PathState():
+    """Represent a pathname and its related atime/mtime/size/etc state."""
+
+    def __init__(self, watchdir, relpath, pseudo=False):
+        self.watchdir = watchdir
+        self.relpath = relpath
+
+        if pseudo:
+            self.atime = -2
+            self.mtime = -1
+            self.size = None
+            self.mode = 0
+            return
+
+        self.flush()
+        stats = os.lstat(self.relpath)
+        self.atime = stats.st_atime_ns
+        self.mtime = stats.st_mtime_ns
+        self.size = stats.st_size
+        self.mode = stats.st_mode
+
+    def __str__(self):
+        return self.relpath
+
+    def __repr__(self):
+        return 'atime=%s mtime=%s size=%s%s' % (
+            self.atime,
+            self.mtime,
+            self.size,
+            '*' if self.watchdir.needflush else '')
+
+    def flush(self):
+        """Do whatever it takes to force NFS flushing of metadata."""
+        if self.watchdir.needflush:
+            nfs_flush(self.relpath)
+
+    def islink(self):
+        """True iff the file is a symbolic link."""
+        return stat.S_ISLNK(self.mode)
+
+
+class StartFile():
+    """Find and sample the file acting as the starting gun."""
+
+    def __init__(self, pattern):
+        self.pattern = pattern
+        self.path = self.mtime = None
+
+    def __str__(self):
+        return '%s: mtime=%d' % (self.path, self.mtime)
+
+    def match(self, path):
+        """Try matching the specified path against the stored pattern."""
+        matched = fnmatch(op.basename(path), self.pattern)
+        if matched and self.path:
+            raise RuntimeError('multiple matches for "%s": %s and %s' % (
+                self.pattern, self.path, path))
+        if not self.path:
+            if op.exists(self.pattern):
+                self.path = self.pattern
+                self.mtime = os.lstat(self.path).st_mtime_ns
+            elif matched:
+                self.path = path
+                self.mtime = os.lstat(self.path).st_mtime_ns
+
+
+class FinalState():
+    """Represent the changes to a given path during the build."""
+
+    def __init__(self, path, prestate, poststate):
+        self.path = path
+        self.prestate = prestate
+        self.poststate = poststate
+
+    def __str__(self):
+        return str(self.todict())
+
+    def __repr__(self):
+        return str(self)
+
+    def todict(self):
+        """Support for JSON serialization."""
+        data = {
+            'atime': [self.prestate.atime if self.prestate else None,
+                      self.poststate.atime],
+            'mtime': [self.prestate.mtime if self.prestate else None,
+                      self.poststate.mtime],
+            'size': [self.prestate.size if self.prestate else None,
+                     self.poststate.size],
+        }
+        return data
+
+
+class FinalStateEncoder(json.JSONEncoder):
+    """Help serialize FinalState objects to JSON."""
+
+    def default(self, o):
+        if isinstance(o, FinalState):
+            return o.todict()
+        return super().default(o)
 
 
 class PMAudit():
     """Track files used (prereqs) and generated (targets)."""
 
-    def __init__(self, watchdirs, exclude_set=(), reffile=None):
+    def __init__(self, watchdirs, exclude_set=(), startfile=None):
         self.watchdirs = watchdirs
         self.exclude_set = exclude_set
         self.prereqs = {}
@@ -200,11 +326,32 @@ class PMAudit():
         self.starttime = None
         self.reftime = None
         self.endtime = None
-        self.reffile = reffile
+        self.startfile = startfile
         self.pre_state = {}
         self.post_state = {}
 
-    def start(self, flush_host=None, keep_going=False):
+    def getpaths(self, watchdirs, startobj=None):
+        """Walk the specified dirs and return a map {path: stats}."""
+
+        paths = {}
+        for watchdir in watchdirs:
+            for parent, dnames, fnames in os.walk(str(watchdir)):
+                dnames[:] = [dname for dname in dnames
+                             if not any(fnmatch(dname, pattern)
+                                        for pattern in self.exclude_set)]
+                for fname in (fn for fn in fnames
+                              if not any(fnmatch(fn, pattern)
+                                         for pattern in self.exclude_set)):
+                    relpath = op.relpath(op.join(parent, fname))
+                    pathstate = PathState(watchdir, relpath)
+                    if not pathstate.islink():
+                        paths[relpath] = pathstate
+                    if startobj:
+                        startobj.match(relpath)
+
+        return paths
+
+    def start(self):
         """
         Start the build audit.
 
@@ -218,187 +365,90 @@ class PMAudit():
         is done by making all atimes a bit earlier than their mtimes.
         """
 
-        mkflags = os.getenv('MAKEFLAGS')
-        if mkflags and ' -j' in mkflags:
-            raise RuntimeError('not supported in -j mode')
-
-        for watchdir in self.watchdirs:
-            # Figure out how atime updates are handled in this filesystem.
-            testfile = op.join(
-                watchdir, f'.{op.basename(__file__)}.{os.getpid()}.tmp')
-            with open(testfile, mode='w', encoding='utf-8') as f:
-                f.write('data\n')
-                ostats = os.fstat(f.fileno())
-            os.utime(testfile, ns=(ostats.st_mtime_ns - DELTA,
-                                   ostats.st_mtime_ns))
-            with open(testfile, encoding='utf-8') as f:
-                f.read()
-            nstats = os.stat(testfile)
-            needflush = nstats.st_atime_ns < nstats.st_mtime_ns
-            if needflush:
-                nfs_flush({testfile: {ATIME: nstats.st_atime_ns,
-                                      MTIME: nstats.st_mtime_ns,
-                                      SIZE: nstats.st_size,
-                                      'needflush': True}}, host=flush_host)
-                with open(testfile, encoding='utf-8') as f:
-                    f.read()
-                nstats = os.stat(testfile)
-                apath = op.dirname(op.abspath(testfile))
-                if nstats.st_atime_ns < nstats.st_mtime_ns:
-                    msg = f'atimes not updated in {apath}'
-                    if not keep_going:
-                        raise RuntimeError(msg)
-                    logging.warning(msg)
-                else:
-                    logging.info('NFS flush required in %s', apath)
-            os.remove(testfile)
-
-            for parent, dnames, fnames in os.walk(watchdir):
-                dnames[:] = [dname for dname in dnames
-                             if not any(fnmatch(dname, pattern)
-                                        for pattern in self.exclude_set)]
-                for fname in (fn for fn in fnames
-                              if not any(fnmatch(fn, pattern)
-                                         for pattern in self.exclude_set)):
-                    path = op.relpath(op.join(parent, fname))
-                    stats = os.stat(path)
-                    if stat.S_ISLNK(stats.st_mode):
-                        continue
-                    # Modern Linux won't update atime unless it's
-                    # older than mtime (the "relatime" feature).
-                    atime, mtime = (stats.st_atime_ns, stats.st_mtime_ns)
-                    if atime >= mtime:
-                        atime = mtime - DELTA
-                        os.utime(path, ns=(atime, mtime))
-                    self.pre_state[path] = {
-                        ATIME: atime,
-                        MTIME: mtime,
-                        SIZE: stats.st_size,
-                        'needflush': needflush,
-                    }
-
-        nfs_flush(self.pre_state, host=flush_host)
-
-        self.starttime = self.reftime = time.time_ns()
+        self.pre_state = self.getpaths(self.watchdirs)
+        for path, pre in self.pre_state.items():
+            # Modern Linux may not update atime unless it's
+            # older than mtime (the "relatime" feature).
+            # Set each atime behind its mtime by some delta.
+            atime, mtime = pre.atime, pre.mtime
+            atime = mtime - ATIME_DELTA
+            os.utime(path, ns=(atime, mtime))
+            pre.atime = atime
 
     def finish(self, cmd=None, final_cmd=None):
         """
         End the build audit.
         """
 
-        # Record when the audited cmd(s) ended.
-        self.endtime = time.time_ns()
-
         # Record the set of surviving files with their times,
         # dividing them into the standard categories.
         # For each recorded file 4 timestamps are kept:
-        # "pre-atime,pre-mtime,post-atime,post-mtime".
+        # pre-atime,pre-mtime,post-atime,post-mtime.
         # This data isn't needed once files have been categorized
-        # but may be helpful in analysis or debugging.
+        # but may be helpful in analysis or debugging so it's
+        # preserved in the output file.
 
-        reffiles = []
+        startobj = StartFile(self.startfile) if self.startfile else None
 
-        # Collect state of files in watched dirs post-action.
-        for watchdir in self.watchdirs:
-            for parent, dnames, fnames in os.walk(watchdir):
-                dnames[:] = [dname for dname in dnames
-                             if not any(fnmatch(dname, pattern)
-                                        for pattern in self.exclude_set)]
-                for fname in (fn for fn in fnames
-                              if not any(fnmatch(fn, pattern)
-                                         for pattern in self.exclude_set)):
-                    path = op.relpath(op.join(parent, fname))
-                    stats = os.stat(path)
-                    if stat.S_ISLNK(stats.st_mode):
-                        continue
-                    atime, mtime = stats.st_atime_ns, stats.st_mtime_ns
-                    data = {
-                        ATIME: atime,
-                        MTIME: mtime,
-                        SIZE: stats.st_size,
-                    }
-                    if (self.reffile and
-                            fnmatch(op.basename(path), self.reffile)):
-                        reffiles.append((path, data))
-                    else:
-                        self.post_state[path] = data
+        self.post_state = self.getpaths(self.watchdirs, startobj=startobj)
 
-        # If a ref file was requested, find it and shift reftime to match.
-        if self.reffile:
-            if len(reffiles) > 1:
-                raise RuntimeError(f'multiple {self.reffile}: {reffiles}')
-            if not reffiles:
-                raise RuntimeError(f'{self.reffile} not found')
-            offset = reffiles[0][1][MTIME] - self.reftime
-            logging.info('%s: bump reftime by %d (%fs)',
-                         reffiles[0][0], offset, offset / NANOS)
-            self.reftime = reffiles[0][1][MTIME]
+        # If a start file was requested and found, shift the reftime to match.
+        if startobj:
+            if not startobj.path:
+                raise RuntimeError('no matches for "%s"' % startobj.pattern)
+            offset = startobj.mtime - self.reftime
+            logging.info('%s: bump start time by %d (%fs)',
+                         startobj.path, offset, offset / NANOS)
+            self.reftime = startobj.mtime
 
         # Walk through the post-state, comparing with the pre-state
         # and categorizing.
-        for path, state in self.post_state.items():
-            atime, mtime = state[ATIME], state[MTIME]
-            pstate = self.pre_state.get(path)
-
-            # The file didn't exist at all pre-command.
-            if not pstate:
-                nstate = {
-                    ATIME: [-2, atime],
-                    MTIME: [-1, mtime],
-                    SIZE: [None, stats.st_size],
-                }
-                if nstate[MTIME][1] <= self.reftime:
+        for path, post in self.post_state.items():
+            pre = self.pre_state.get(path)
+            if pre:
+                # Compare pre- vs post-states to classify the path.
+                endstate = FinalState(path, pre, post)
+                if post.atime > pre.atime:
+                    if post.mtime > pre.mtime:
+                        if post.mtime > post.atime:
+                            logging.info('pre-existing %s is FINAL', path)
+                            self.finals[path] = endstate
+                        else:
+                            logging.info('pre-existing %s is TARGET', path)
+                            self.intermediates[path] = endstate
+                    else:
+                        self.prereqs[path] = endstate
+                elif post.mtime > pre.mtime:
+                    logging.info('pre-existing %s is MODIFIED', path)
+                    self.finals[path] = endstate
+                else:
+                    logging.debug('pre-existing %s is UNUSED', path)
+                    self.unused[path] = endstate
+            else:
+                # In this clause the file didn't exist at all pre-command.
+                newfile = PathState(post.watchdir, post.relpath, pseudo=True)
+                endstate = FinalState(path, newfile, post)
+                if post.mtime <= self.reftime:
                     # This new file has mod time prior to reftime which is
                     # theoretically impossible since it would have been
                     # picked up by the pre-traversal. Therefore the only
                     # way this could happen is if the reftime was shifted
                     # forward by the ref file in which case it must be
                     # considered a prereq.
-                    self.prereqs[path] = nstate
                     logging.info('pre-generated %s is PREREQ', path)
-                elif mtime < atime:
+                    self.prereqs[path] = endstate
+                elif post.mtime < post.atime:
                     # Read-after-write makes it an intermediate target.
-                    self.intermediates[path] = nstate
                     logging.info('generated %s is INTERMEDIATE', path)
-                elif mtime > atime:
-                    # Write-after-read is weird.
-                    self.intermediates[path] = nstate
+                    self.intermediates[path] = endstate
+                elif post.mtime > post.atime:
+                    # Write-after-read is a weird intermediate/target.
                     logging.info('generated %s is TARGET', path)
+                    self.intermediates[path] = endstate
                 else:
                     # Otherwise it must be a final target.
-                    self.finals[path] = nstate
                     logging.info('generated %s is FINAL', path)
-                continue
-
-            if atime > pstate[ATIME]:
-                nstate = {
-                    ATIME: [pstate[ATIME], atime],
-                    MTIME: [pstate[MTIME], mtime],
-                    SIZE: [pstate[SIZE], stats.st_size],
-                }
-                if mtime > pstate[MTIME]:
-                    if mtime > atime:
-                        self.finals[path] = nstate
-                        logging.info('pre-existing %s is FINAL', path)
-                    else:
-                        self.intermediates[path] = nstate
-                        logging.info('pre-existing %s is TARGET', path)
-                else:
-                    self.prereqs[path] = nstate
-            elif mtime > pstate[MTIME]:
-                self.finals[path] = {
-                    ATIME: [pstate[ATIME], atime],
-                    MTIME: [pstate[MTIME], mtime],
-                    SIZE: [pstate[SIZE], stats.st_size],
-                }
-                logging.info('pre-existing %s is MODIFIED', path)
-            else:
-                self.unused[path] = {
-                    ATIME: [pstate[ATIME], 0],
-                    MTIME: [pstate[MTIME], 0],
-                    SIZE: [pstate[SIZE], pstate[SIZE]],
-                }
-                logging.debug('pre-existing %s is UNUSED', path)
+                    self.finals[path] = endstate
 
         # Build up and return a serializable database.
         root = {}
@@ -430,7 +480,7 @@ def dump_json(data, filename):
         # Unfortunately json.dump() provides very little formatting control
         # so we'll just re-implement what we need.
         # We assume starting indentation (if needed) has already occurred.
-        if data and isinstance(data, dict) and ATIME not in data:
+        if data and isinstance(data, dict) and 'atime' not in data:
             open_file.write(LB + '\n')
             new_indent = current + indent
             indent_text = new_indent * ' '
@@ -449,27 +499,14 @@ def dump_json(data, filename):
             # Lists have no long dicts so re-implementation isn't needed.
             # Instead, everything *but* dicts are forced onto a single line.
         else:
-            json.dump(data, open_file)
+            json.dump(data, open_file, cls=FinalStateEncoder)
 
     os.makedirs(op.dirname(filename) or os.curdir, exist_ok=True)
-    with open(filename, mode='w', encoding='utf-8') as f:
+    with open(filename, mode='w', encoding=UTF8) as f:
         # We don't use json.dump() directly because it produces
         # many multi-line lists.
         json_dump_flat(data, f)
         f.write('\n')
-
-
-def custom_results(entries):
-    """Convert a list of key=value pairs into a dictionary."""
-    result = {}
-    if entries:
-        for entry in entries:
-            if '=' in entry:
-                key, value = entry.split('=', maxsplit=1)
-                result[key] = value
-            else:  # if no value is given, treat it as a boolean.
-                result[entry] = True
-    return result
 
 
 def main():
@@ -491,11 +528,6 @@ def main():
         '-c', '--cmd', action='store_true',
         help="run and audit the specified command line")
     parser_run.add_argument(
-        '--custom', action='append',
-        metavar='KEY_VALUE_PAIR',
-        help="include custom key=value pair in JSON results"
-        if extended_help else argparse.SUPPRESS)
-    parser_run.add_argument(
         '-d', '--depsfile',
         metavar='FILE',
         help="save prerequisite data to FILE in makefile format"
@@ -516,15 +548,11 @@ def main():
         metavar='FILE',
         help="save audit data in JSON format to FILE")
     parser_run.add_argument(
-        '-k', '--keep-going', action='store_true',
-        help="continue even if atimes aren't updated"
-        if extended_help else argparse.SUPPRESS)
-    parser_run.add_argument(
         '--multiline', action='store_true',
         help="separately run each line in the -c string"
         if extended_help else argparse.SUPPRESS)
     parser_run.add_argument(
-        '-r', '--ref-file',
+        '-s', '--start-file',
         help="offset timestamps from this generated file")
     parser.add_argument(
         '--shell', default='/bin/sh',
@@ -542,6 +570,9 @@ def main():
     parser_query.add_argument(
         '-A', '--query-all-involved', action='store_true',
         help="list all involved files")
+    parser_query.add_argument(
+        '-C', '--query-cmd', action='store_true',
+        help="show the command(s) run")
     parser_query.add_argument(
         '-F', '--query-final-targets', action='store_true',
         help="list final target files")
@@ -600,12 +631,12 @@ def main():
         if not opts.json and not opts.depsfile:  # Implement default save.
             opts.json = JSON
 
-        adirs = []
+        wdirs = []
         if opts.audit_dir:
             for word in opts.audit_dir:
-                adirs.extend(word.split(','))
+                wdirs.extend(word.split(','))
         else:
-            adirs.append(os.curdir)
+            wdirs.append(os.curdir)
 
         exclude_set = set(opts.exclude)
         if opts.json:
@@ -613,24 +644,26 @@ def main():
         if opts.depsfile:
             exclude_set.add(opts.depsfile)
 
-        audit = PMAudit(adirs,
+        audit = PMAudit([WatchDir(w) for w in wdirs],
                         exclude_set=exclude_set,
-                        reffile=opts.ref_file)
-        audit.start(flush_host=opts.flush_host, keep_going=opts.keep_going)
+                        startfile=opts.start_file)
+        audit.start()
+        audit.starttime = audit.reftime = time.time_ns()
         for cmd in cmds:  # Execute each line in sequence.
             rc = subprocess.call(cmd)
             # Stop if we get an error.  Note that "make" does this *even*
-            # with -k/--keep-going mode because -k is per recipe whereas
+            # in its -k/--keep-going mode because -k is per recipe whereas
             # this is per line of recipe.
             if rc != 0:
                 break
+        audit.endtime = time.time_ns()
         adb = audit.finish(cmd=cmd_text, final_cmd=cmds)
-        adb[CUSTOM] = custom_results(opts.custom)
+
         if opts.depsfile:
             prqs = adb[DB][PREREQS]
             # *Always* create depsfile, even if prqs is empty.
             os.makedirs(op.dirname(opts.depsfile), exist_ok=True)
-            with open(opts.depsfile, mode='w', encoding='utf-8') as f:
+            with open(opts.depsfile, mode='w', encoding=UTF8) as f:
                 f.write(op.splitext(opts.depsfile)[0] + ': \\\n')
                 for i, prq in enumerate(prqs):
                     eol = ' \\\n' if i < len(prqs) - 1 else '\n'
@@ -650,9 +683,11 @@ def main():
         help="query audit data from FILE [%(default)s]")
     opts = parser.parse_args()
 
-    with open(opts.dbfile, encoding='utf-8') as f:
+    with open(opts.dbfile, encoding=UTF8) as f:
         root = json.load(f)
-    db = root[DB]
+
+    if opts.query_cmd:
+        print(root['cmd'])
 
     if opts.query_all_involved:
         opts.query_prerequisites = True
@@ -664,6 +699,7 @@ def main():
 
     results = {}
 
+    db = root[DB]
     if opts.query_intermediates:
         results.update(db[INTERMEDIATES])
     if opts.query_prerequisites:
@@ -675,7 +711,7 @@ def main():
 
     def by_atime(item):
         """Sort by post-atime."""
-        return float(item[1][ATIME][1])
+        return float(item[1]['atime'][1])
 
     key = None if opts.alpha_sort else by_atime
     for path in [k for k, _ in sorted(results.items(), key=key)]:
