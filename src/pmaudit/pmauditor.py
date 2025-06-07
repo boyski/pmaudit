@@ -64,9 +64,20 @@ relatime for background.  The invention of relatime has made the use
 of noatime in NFS less common, which is a big help, and relatime is
 becoming a common NFS mount option.
 
+UPDATE: even with relatime this cannot be quite as reliable in NFS. The
+problem is with intermediate files. All %(prog)s can do is sample pre-
+and post-build. During the pre-build sampling it can set atimes back
+to trigger relatime behavior but there's no way for it to apply the
+same hack to files created _during_ the build so in a relatime-mounted
+filesystem they won't have their atimes updated.  The net result is to
+lose the distinction between "target" and "final target". Bottom line,
+useful data can still be collected in NFS but the best data comes from
+using it in a filesystem mounted with neither "relatime" nor "noatime"
+which in practice generally means local.
+
 If the underlying filesystem doesn't support sufficient timestamp
-precision results may be iffy. Clearly, if atimes and mtimes were
-recorded only as seconds all files touched within the same second
+precision results may also be iffy. Clearly, if atimes and mtimes
+were recorded only as seconds all files touched within the same second
 would have the same timestamp and confusion may occur. Thus %(prog)s is
 best used on a modern filesystem which records nanoseconds or similar.
 It's not that nanosecond precision per se is required, just that the
@@ -164,13 +175,15 @@ def time_details(reftime):
 
 def nfs_flush(path):
     """Do whatever it takes to force NFS flushing of metadata if needed."""
+    # There are other methods but this one seems good enough for at least
+    # one NFS server implementation.
     with open(path, encoding=UTF8) as f:
         fcntl.lockf(f.fileno(), fcntl.LOCK_SH, 1, 0, 0)
         fcntl.lockf(f.fileno(), fcntl.LOCK_UN, 1, 0, 0)
 
 
 class WatchDir():
-    """Wrap over dirs and remember whether they need nfs-flushing."""
+    """Wrap over a dir and remember whether it needs nfs-flushing."""
 
     def __init__(self, path):
         self.path = path
@@ -262,6 +275,9 @@ class StartFile():
     def __str__(self):
         return '%s: mtime=%d' % (self.path, self.mtime)
 
+    def __repr__(self):
+        return str(self)
+
     def match(self, path):
         """Try matching the specified path against the stored pattern."""
         matched = fnmatch(op.basename(path), self.pattern)
@@ -290,6 +306,10 @@ class FinalState():
 
     def __repr__(self):
         return str(self)
+
+    def isnew(self):
+        """Return True iff the underlying file was created by the build."""
+        return self.prestate.size is None
 
     def todict(self):
         """Support for JSON serialization."""
@@ -406,7 +426,8 @@ class PMAudit():
         for path, post in self.post_state.items():
             pre = self.pre_state.get(path)
             if pre:
-                # Compare pre- vs post-states to classify the path.
+                # This file existed prior to the audited build.
+                # Compare pre- vs post-states to classify it.
                 endstate = FinalState(path, pre, post)
                 if post.atime > pre.atime:
                     if post.mtime > pre.mtime:
@@ -417,6 +438,7 @@ class PMAudit():
                             logging.info('pre-existing %s is TARGET', path)
                             self.intermediates[path] = endstate
                     else:
+                        logging.info('pre-existing %s is PREREQ', path)
                         self.prereqs[path] = endstate
                 elif post.mtime > pre.mtime:
                     logging.info('pre-existing %s is MODIFIED', path)
@@ -425,16 +447,15 @@ class PMAudit():
                     logging.debug('pre-existing %s is UNUSED', path)
                     self.unused[path] = endstate
             else:
-                # In this clause the file didn't exist at all pre-command.
-                newfile = PathState(post.watchdir, post.relpath, pseudo=True)
-                endstate = FinalState(path, newfile, post)
+                # In this clause the file was newly created by the command.
+                prefile = PathState(post.watchdir, post.relpath, pseudo=True)
+                endstate = FinalState(path, prefile, post)
                 if post.mtime <= self.reftime:
-                    # This new file has mod time prior to reftime which is
+                    # The new file has mod time prior to reftime which is
                     # theoretically impossible since it would have been
                     # picked up by the pre-traversal. Therefore the only
                     # way this could happen is if the reftime was shifted
-                    # forward by the ref file in which case it must be
-                    # considered a prereq.
+                    # forward in which case it must be considered a prereq.
                     logging.info('pre-generated %s is PREREQ', path)
                     self.prereqs[path] = endstate
                 elif post.mtime < post.atime:
