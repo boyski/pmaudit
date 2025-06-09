@@ -17,13 +17,13 @@ ssize_t write(int fd, const void *buf, size_t count)
     struct stat st;
     struct timespec ts[2];
 
-    // Find the original write function and use it.
+    // Look up the original write function and use it.
     if (!real_write) {
         real_write = (ssize_t (*)(int, const void *, size_t))dlsym(RTLD_NEXT, "write");
     }
     result = real_write(fd, buf, count);
 
-    // If write was unsuccessful, just return and let the caller handle it.
+    // If write was unsuccessful, return and let the caller handle it.
     if (result == -1) {
 	return result;
     }
@@ -42,7 +42,7 @@ ssize_t write(int fd, const void *buf, size_t count)
     // Leave mtime unchanged.
     ts[1] = st.st_mtim;  // mtime (preserve original)
 
-    // Update file times with nanosecond precision.
+    // Update the file times with nanosecond precision.
     if (futimens(fd, ts) == -1) {
 	perror("futimens()"); // Carry on if we can't update times.
     }
