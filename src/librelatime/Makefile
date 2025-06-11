@@ -11,9 +11,12 @@ $(TARGET): $(NAME).c
 test_relatime: test_relatime.c
 	$(CC) -o $@ $<
 
+SETUP := LD_PRELOAD=$(TARGET) LD_LIBRARY_PATH=$(CURDIR)
+
 .PHONY: test
 test: $(TARGET) test_relatime
-	LD_PRELOAD=$(CURDIR)/$(TARGET) ./test_relatime
+	$(SETUP) ./test_relatime
+#	$(SETUP) /usr/bin/gcc -c hello.c
 
 .PHONY: clean
 clean:
