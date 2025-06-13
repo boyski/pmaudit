@@ -1,4 +1,6 @@
-CFLAGS := -Wall -Wextra -fPIC -shared -O2
+CFLAGS := -Wall -Wextra -fpic -shared -g -m64
+SHLIBFLAGS := $(CFLAGS) -ldl
+
 NAME := relatime
 TARGET := lib$(NAME).so
 
@@ -6,7 +8,7 @@ TARGET := lib$(NAME).so
 all: $(TARGET)
 
 $(TARGET): $(NAME).c
-	$(CC) $(CFLAGS) -o $@ $< -ldl
+	$(CC) -o $@ $< $(SHLIBFLAGS)
 
 test_relatime: test_relatime.c
 	$(CC) -o $@ $<
@@ -16,7 +18,7 @@ SETUP := LD_PRELOAD=$(TARGET) LD_LIBRARY_PATH=$(CURDIR)
 .PHONY: test
 test: $(TARGET) test_relatime
 	$(SETUP) ./test_relatime
-#	$(SETUP) /usr/bin/gcc -c hello.c
+	$(SETUP) /usr/bin/gcc -c hello.c
 
 .PHONY: clean
 clean:
