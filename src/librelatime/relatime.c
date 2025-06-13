@@ -25,6 +25,9 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+// Set atime to exactly two days before mtime.
+#define ATIME_DELTA_SECS (86400 * 2)
+
 void
 adjust_atime(int fd)
 {
@@ -37,16 +40,16 @@ adjust_atime(int fd)
 	return;
     }
 
-    // Set atime to exactly one day (86400 seconds) before mtime.
-    ts[0].tv_sec = st.st_mtime - 86400;  // atime: mtime - 1 day
-    ts[0].tv_nsec = st.st_mtim.tv_nsec;  // Keep same nanoseconds as mtime
-
-    // Leave mtime unchanged.
-    ts[1] = st.st_mtim;  // mtime (preserve original)
+    ts[0].tv_sec = st.st_mtime - ATIME_DELTA_SECS;  // make atime secs older than mtime
+    ts[0].tv_nsec = st.st_mtim.tv_nsec;             // keep atime nanos same as mtime
+    ts[1].tv_sec = UTIME_OMIT;                      // leave mtime secs unchanged
+    ts[1].tv_nsec = UTIME_OMIT;                     // leave mtime nanos unchanged
 
     // Update the file times with nanosecond precision.
     if (futimens(fd, ts) == -1) {
-	// perror("futimens()"); // Carry on if we can't update times.
+	// If time update fails just carry on silently.
+	// It's probably a system file we don't care about.
+	// perror("futimens()");
     } else {
 	// Temporary debug hack.
 	char proc[4096] = {0};
@@ -54,7 +57,9 @@ adjust_atime(int fd)
 
 	(void)snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
 	readlink(proc, path, sizeof(path) - 1);
-	fprintf(stderr, "=-= moved atime of %s a day behind mtime\n", path);
+	if (*path == '/' && strncmp(path, "/tmp/", 5)) {
+	    fprintf(stderr, "=-= moved atime of %s behind mtime\n", path);
+	}
     }
 }
 
@@ -65,7 +70,7 @@ write(int fd, const void *buf, size_t count)
     static ssize_t (*real_write)(int fd, const void *buf, size_t count) = NULL;
     ssize_t result;
 
-    // Look up the original write function and use it.
+    // Look up the original write() function and use it.
     if (!real_write) {
         real_write = (ssize_t (*)(int, const void *, size_t))dlsym(RTLD_NEXT, "write");
     }
@@ -74,6 +79,48 @@ write(int fd, const void *buf, size_t count)
     // If successful, update access time.
     if (result != -1) {
 	adjust_atime(fd);
+    }
+
+    return result;
+}
+
+// Intercepted fwrite() function.
+size_t
+fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+    static size_t (*real_fwrite)(const void *ptr, size_t size, size_t nmemb, FILE *stream) = NULL;
+    size_t result;
+
+    // Look up the original fwrite() function and use it.
+    if (!real_fwrite) {
+        real_fwrite = (size_t (*)(const void *, size_t, size_t, FILE *))dlsym(RTLD_NEXT, "fwrite");
+    }
+    result = real_fwrite(ptr, size, nmemb, stream);
+
+    // If successful, update access time.
+    if ((ssize_t)result != -1) {
+	adjust_atime(fileno(stream));
+    }
+
+    return result;
+}
+
+// Intercepted fwrite_unlocked() function.
+size_t
+fwrite_unlocked(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+    static size_t (*real_fwrite_unlocked)(const void *ptr, size_t size, size_t nmemb, FILE *stream) = NULL;
+    size_t result;
+
+    // Look up the original fwrite_unlocked() function and use it.
+    if (!real_fwrite_unlocked) {
+        real_fwrite_unlocked = (size_t (*)(const void *, size_t, size_t, FILE *))dlsym(RTLD_NEXT, "fwrite_unlocked");
+    }
+    result = real_fwrite_unlocked(ptr, size, nmemb, stream);
+
+    // If successful, update access time.
+    if ((ssize_t)result != -1) {
+	adjust_atime(fileno(stream));
     }
 
     return result;
