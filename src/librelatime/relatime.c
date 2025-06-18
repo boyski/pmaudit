@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <unistd.h>
 
 // Set atime to exactly two days before mtime.
 #define ATIME_DELTA_SECS (86400 * 2)
@@ -33,33 +34,41 @@ adjust_atime(int fd)
 {
     struct stat st;
     struct timespec ts[2];
+    char proc[4096] = {0}, path[4096] = {0};
 
-    // Start by getting the current times.
-    if (fstat(fd, &st) == -1) {
-	perror("fstat()");
+    (void)snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+    readlink(proc, path, sizeof(path) - 1);
+    if (*path != '/' || !strncmp(path, "/tmp/", 5)) {
 	return;
     }
 
+    // Start by doing whatever possible to ensure metadata is current.
+    if (fsync(fd) == -1) {
+	perror(path);
+    }
+
+    // Get the current stat structure including atime/mtime.
+    if (fstat(fd, &st) == -1) {
+	perror(path);
+	return;
+    }
+
+    // If atime is already behind mtime there's no need to do more.
+    if (st.st_atime < st.st_mtime) {
+	return;
+    }
+    fprintf(stderr, "=-= moved atime of %s behind mtime\n", path);
+
+    // Update file times with nanosecond precision.
     ts[0].tv_sec = st.st_mtime - ATIME_DELTA_SECS;  // make atime secs older than mtime
     ts[0].tv_nsec = st.st_mtim.tv_nsec;             // keep atime nanos same as mtime
     ts[1].tv_sec = UTIME_OMIT;                      // leave mtime secs unchanged
     ts[1].tv_nsec = UTIME_OMIT;                     // leave mtime nanos unchanged
 
-    // Update the file times with nanosecond precision.
-    if (futimens(fd, ts) == -1) {
-	// If time update fails just carry on silently.
-	// It's probably a system file we don't care about.
-	// perror("futimens()");
-    } else {
-	// Temporary debug hack.
-	char proc[4096] = {0};
-	char path[4096] = {0};
-
-	(void)snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
-	readlink(proc, path, sizeof(path) - 1);
-	if (*path == '/' && strncmp(path, "/tmp/", 5)) {
-	    fprintf(stderr, "=-= moved atime of %s behind mtime\n", path);
-	}
+    // On failure just carry on silently.
+    // It's probably a system file we don't care about.
+    if (futimens(fd, ts) != -1) {
+	fprintf(stderr, "=-= moved atime of %s behind mtime\n", path);
     }
 }
 
